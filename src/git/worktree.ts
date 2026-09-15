@@ -245,6 +245,27 @@ export async function branchOnRemote(cfg: GitConfig, branch: string): Promise<bo
 }
 
 /**
+ * Whether a commit is in a branch's history as the remote now has it. After a merge
+ * commit it is; after a squash — or a rebase — the same content is there under commits
+ * this one is not an ancestor of, and it is not.
+ */
+export async function inHistoryOf(
+  cfg: GitConfig,
+  commit: string,
+  branch: string,
+): Promise<boolean> {
+  await git(cfg.repoRoot, 'fetch', '--quiet', 'origin', branch);
+  try {
+    await git(cfg.repoRoot, 'merge-base', '--is-ancestor', commit, `origin/${branch}`);
+    return true;
+  } catch (error) {
+    // 1 is git's "no"; anything else is git unable to answer, which is not a squash.
+    if ((error as { code?: unknown }).code === 1) return false;
+    throw error;
+  }
+}
+
+/**
  * Pushes a ticket's work to a branch the workbench does not own, as a fast-forward and
  * as nothing else: no force flag, no plus-sign refspec. That branch is somebody's, often under
  * a pull request they are reading, and overwriting what they pushed is never the fix.

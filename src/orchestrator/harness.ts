@@ -11,6 +11,8 @@ export type Harness = {
   /** Every stage run that happened, in order. */
   ran: Stage[];
   prsOpened: string[];
+  /** Every worktree asked for, in order, with the branch it was to be cut from when it was given one. */
+  prepared: { id: string; on?: string }[];
   /** Every push to a branch the workbench does not own that landed, as `<ticket> -> <branch>`. */
   pushes: string[];
   /**
@@ -115,6 +117,7 @@ export function harness(
   const branched = new Set<string>();
   const ran: Stage[] = [];
   const prsOpened: string[] = [];
+  const prepared: Harness['prepared'] = [];
   const pushes: string[] = [];
   const pushAttempts = new Map<string, number>();
   const refreshed: Harness['refreshed'] = [];
@@ -128,7 +131,8 @@ export function harness(
   const orch = createOrchestrator({
     store,
     workspace: {
-      prepare: async (id) => {
+      prepare: async (id, _from, on) => {
+        prepared.push({ id, ...(on === undefined ? {} : { on }) });
         const first = !branched.has(id);
         branched.add(id);
         return {
@@ -201,6 +205,7 @@ export function harness(
     orch,
     ran,
     prsOpened,
+    prepared,
     pushes,
     refreshed,
     prsMerged,

@@ -29,6 +29,11 @@ test('a ticket on somebody else’s branch pushes back to it and is done, with n
     assert.deepEqual(h.ran, ['plan', 'implement', 'review', 'verify'], 'every stage first');
     assert.deepEqual(h.pushes, ['t1 -> their-feature']);
     assert.deepEqual(h.prsOpened, [], 'no pull request of its own');
+    assert.ok(h.prepared.length > 0, 'a worktree was asked for');
+    assert.ok(
+      h.prepared.every((p) => p.on === 'their-feature'),
+      'cut from their branch, not the base',
+    );
     assert.ok(
       h.refreshed.every((r) => r.on === 'their-feature'),
       'kept current with their branch, not the base',

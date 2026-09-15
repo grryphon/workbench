@@ -8,12 +8,24 @@ import {
   mergeArgs,
   mergeCommitsRefusal,
   mergeSubject,
+  noPullRequest,
   readTarget,
   readVerdict,
   retryableMergeFailure,
   reusablePr,
   withNote,
 } from './pr.ts';
+
+test('only gh saying there is no pull request means there is none', () => {
+  const failed = (stderr: string) => Object.assign(new Error('Command failed'), { stderr });
+  assert.equal(noPullRequest(failed('no pull requests found for branch "their-feature"\n')), true);
+  assert.equal(noPullRequest(failed('error connecting to api.github.com\n')), false);
+  assert.equal(
+    noPullRequest(failed('To get started with GitHub CLI, please run: gh auth login')),
+    false,
+  );
+  assert.equal(noPullRequest(new Error('spawn gh ENOENT')), false);
+});
 
 test('the note against squashing goes on a pull request once, after what it already says', () => {
   const noted = withNote('Their description.\n');

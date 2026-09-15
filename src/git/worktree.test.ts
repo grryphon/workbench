@@ -8,9 +8,11 @@ import path from 'node:path';
 
 import {
   abandonMerge,
+  branchOnRemote,
   commitAll,
   create,
   diff,
+  inHistoryOf,
   push,
   refresh,
   remove,
@@ -253,8 +255,43 @@ async function theirBranch(cfg: GitConfig) {
   const remoteHead = async (branch: string) =>
     (await run('git', ['rev-parse', branch], { cwd: remote })).stdout.trim();
 
-  return { push, remoteHead };
+  return { push, remoteHead, git: theirs };
 }
+
+test('a branch to work on is one the remote has', async () => {
+  const cfg = await scratchRepo();
+  try {
+    const them = await theirBranch(cfg);
+    await them.push('their-feature', 'theirs.txt');
+
+    assert.equal(await branchOnRemote(cfg, 'their-feature'), true);
+    assert.equal(await branchOnRemote(cfg, 'no-such'), false);
+  } finally {
+    await cleanUp(cfg);
+  }
+});
+
+test('pushed work merged into main is in its history, and squashed onto it is not', async () => {
+  const cfg = await scratchRepo();
+  try {
+    const them = await theirBranch(cfg);
+    const merged = await them.push('their-feature', 'theirs.txt');
+    const squashed = await them.push('other-feature', 'other.txt');
+    // Here as well, as a commit the workbench pushed from a worktree would be.
+    await run('git', ['fetch', '-q', 'origin'], { cwd: cfg.repoRoot });
+
+    await them.git('checkout', '-q', '-B', 'main', 'origin/main');
+    await them.git('merge', '-q', '--no-ff', '-m', 'merge their-feature', 'origin/their-feature');
+    await them.git('merge', '-q', '--squash', 'origin/other-feature');
+    await them.git('commit', '-q', '-m', 'other-feature, squashed');
+    await them.git('push', '-q', 'origin', 'main');
+
+    assert.equal(await inHistoryOf(cfg, merged, 'main'), true, 'a merge commit keeps it');
+    assert.equal(await inHistoryOf(cfg, squashed, 'main'), false, 'a squash does not');
+  } finally {
+    await cleanUp(cfg);
+  }
+});
 
 test('a ticket on somebody else’s branch is cut from it and kept current with it', async () => {
   const cfg = await scratchRepo();

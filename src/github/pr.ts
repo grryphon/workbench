@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import type { CodeHost, Verdict } from '../orchestrator/loop.ts';
 import {
   branchOnRemote,
+  inHistoryOf,
   push as pushBranch,
   worktreeFor,
   type GitConfig,
@@ -58,14 +59,9 @@ export function githubHost(cfg: GitConfig, announce: (message: string) => void):
       // Merged, and whether as itself is a question for the branch it merged into, which
       // is the base unless the pull request said otherwise. A squash — or a rebase —
       // leaves the same content there under commits the pushed one is not an ancestor of.
-      const into = pr.baseRefName || cfg.base;
-      await run('git', ['fetch', '--quiet', 'origin', into], { cwd: cfg.repoRoot });
-      return run('git', ['merge-base', '--is-ancestor', pushed.commit, `origin/${into}`], {
-        cwd: cfg.repoRoot,
-      }).then(
-        () => 'merged' as const,
-        () => 'squashed' as const,
-      );
+      return (await inHistoryOf(cfg, pushed.commit, pr.baseRefName || cfg.base))
+        ? 'merged'
+        : 'squashed';
     },
   };
 }
@@ -105,6 +101,10 @@ export function withNote(body: string): string {
  * The first time the workbench meets one it asks, on it, for a merge rather than a
  * squash. Not being able to say so is announced rather than blocking: the push has
  * landed, and the watch afterwards still notices a squash.
+ *
+ * Not being able to ask at all is thrown, after the push. Recorded as no pull request,
+ * the note, the watch and the squash check would all quietly never happen; thrown, the
+ * ticket blocks with the reason, and trying again pushes nothing new and asks again.
  */
 async function pullRequestOn(
   cwd: string,
@@ -115,9 +115,12 @@ async function pullRequestOn(
   try {
     const { stdout } = await run('gh', ['pr', 'view', branch, '--json', 'url,state,body'], { cwd });
     pr = JSON.parse(stdout) as typeof pr;
-  } catch {
-    // `gh` fails when there is no pull request to view, which is an ordinary case here.
-    return null;
+  } catch (error) {
+    if (noPullRequest(error)) return null;
+    throw new Error(
+      `pushed to ${branch}, but could not ask whether a pull request is open on it: ` +
+        (error instanceof Error ? error.message : String(error)),
+    );
   }
   if (pr.state !== 'OPEN' || !pr.url) return null;
 
@@ -133,6 +136,16 @@ async function pullRequestOn(
     }
   }
   return pr.url;
+}
+
+/**
+ * Whether `gh pr view <branch>` failed because the branch has no pull request — an
+ * ordinary case — rather than because GitHub could not be asked: logged out, offline,
+ * rate limited. Its own function so the difference can be tested without a network.
+ */
+export function noPullRequest(error: unknown): boolean {
+  const said = String((error as { stderr?: unknown } | null)?.stderr ?? '');
+  return /no pull requests found/i.test(said);
 }
 
 /**
