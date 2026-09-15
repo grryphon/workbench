@@ -25,7 +25,8 @@ Tickets sit in columns and move themselves as the work proceeds:
 The only card you move between columns by hand is one between **Backlog** and
 **Committed**. Everything to the right of that moves itself, and a ticket that is stuck
 stays in the column of the stage it stopped in, marked as needing you. The header counts
-everything waiting on you.
+everything waiting on you. Each backlog card has a tick box in its corner, and *Commit N*
+above the column moves the ticked ones to **Committed** together, in the order they were in.
 
 **Light or dark, at the end of the header.** *Auto* follows the machine and is what you
 get until you say otherwise; *Light* and *Dark* overrule it. The choice is the browser's,

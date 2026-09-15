@@ -2,6 +2,9 @@ import { needsYou, salvageable } from '../../src/domain/board.ts';
 import { waitingOutLimit } from '../../src/domain/rules.ts';
 import type { Ticket } from '../../src/domain/ticket.ts';
 
+/** A card that can be ticked, to be moved along with others in one press. */
+export type Picking = { picked: boolean; onPick: (picked: boolean) => void };
+
 /**
  * What a card says at a glance: which ticket, what it is, and whether it is
  * moving, stuck, or waiting on you. Everything else is one click away.
@@ -23,6 +26,8 @@ export function Card(props: {
   onDragEnd: () => void;
   onDrop: () => void;
   onOpen: () => void;
+  /** A tick box in the corner, where the column lets several cards move at once. */
+  pick?: Picking;
 }) {
   const t = props.ticket;
   // Done holds everything finished, and "we stopped it" is not "it was accepted".
@@ -93,7 +98,7 @@ export function Card(props: {
     t.costUsd > 0 && <span key="cost">${t.costUsd.toFixed(2)}</span>,
   ].filter(Boolean);
 
-  return (
+  const card = (
     <button
       type="button"
       className={`card${needsYou(t) ? ' needs' : ''}${t.running ? ' busy' : ''}${
@@ -119,5 +124,21 @@ export function Card(props: {
       </div>
       <div className={stopped ? 'title stopped' : 'title'}>{t.title}</div>
     </button>
+  );
+
+  if (props.pick === undefined) return card;
+  const { picked, onPick } = props.pick;
+  // Beside the button rather than in it: a control inside a button is not valid, and
+  // its click would reach the button and open the panel.
+  return (
+    <div className="pickable">
+      {card}
+      <input
+        type="checkbox"
+        aria-label={`Select ${t.id}`}
+        checked={picked}
+        onChange={(e) => onPick(e.target.checked)}
+      />
+    </div>
   );
 }

@@ -270,12 +270,16 @@ header .stopper.go {
 
 /* Board ------------------------------------------------------------------- */
 
+/* The column is the drop target, so its height is the drop zone. Columns stretch
+   to the tallest one rather than shrinking to their cards — otherwise a short
+   Committed only takes a drop over its few cards — and the floor keeps some zone
+   when every column is short. */
 .board {
   display: flex;
   gap: 1rem;
   padding: 1.2rem;
   overflow-x: auto;
-  align-items: start;
+  min-height: 60vh;
 }
 
 .col {
@@ -381,6 +385,22 @@ header .stopper.go {
 
 .card .id {
   font-variant-numeric: tabular-nums;
+}
+
+/* A backlog card with its tick box in the corner, beside the button rather than in it. */
+.pickable {
+  position: relative;
+}
+
+.pickable .card {
+  padding-right: 1.8rem;
+}
+
+.pickable input[type='checkbox'] {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.6rem;
+  margin: 0;
 }
 
 .card .title {
@@ -1367,6 +1387,16 @@ ul.completion-criteria {
 .col .new {
   width: 100%;
   margin-bottom: 0.5rem;
+}
+
+.col .commit {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.col .commit .go {
+  flex: 1;
 }
 
 /* Pages ------------------------------------------------------------------ */

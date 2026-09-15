@@ -17,7 +17,7 @@ import { heldBy, waitingOutLimit, type Policy } from '../../src/domain/rules.ts'
 import { ended, type Ticket } from '../../src/domain/ticket.ts';
 import { Analytics } from './Analytics.tsx';
 import { applyBrand, isColour } from './brand.ts';
-import { Card } from './Card.tsx';
+import { Card, type Picking } from './Card.tsx';
 import { Detail } from './Detail.tsx';
 import { Docs } from './Docs.tsx';
 import { Interrupted } from './Interrupted.tsx';
@@ -99,6 +99,9 @@ export function App() {
   const [version, setVersion] = useState(0);
   const [at, setAt] = useState(idInHash);
   const [dragging, setDragging] = useState<Ticket | null>(null);
+  // Backlog cards ticked to be committed together. Only ids: what counts is worked out
+  // against the backlog as drawn, so a card that leaves it any other way drops out.
+  const [picked, setPicked] = useState<Set<string>>(new Set());
   // The agent and skill files, held here rather than in the page that shows them:
   // the tabs count them, so they are wanted whichever page you are on.
   const [docs, setDocs] = useState<Record<DocKind, Doc[]> | null>(null);
@@ -231,6 +234,29 @@ export function App() {
     },
     [act],
   );
+
+  const chosen = inColumn(tickets, BACKLOG).filter((t) => picked.has(t.id));
+
+  /**
+   * The ticked backlog cards to Committed, in board order, so they land in it in the
+   * order they left. One at a time: a failure stops the rest, and those already
+   * queued have left the backlog and so the selection too.
+   */
+  const commitAll = async () => {
+    for (const t of chosen) await wb.queue(t.id);
+    setPicked(new Set());
+  };
+
+  const pick = (t: Ticket): Picking => ({
+    picked: picked.has(t.id),
+    onPick: (on) =>
+      setPicked((was) => {
+        const next = new Set(was);
+        if (on) next.add(t.id);
+        else next.delete(t.id);
+        return next;
+      }),
+  });
 
   /** Dropped on a card: the dragged one goes in front of it, in the board's order. */
   const reorder = useCallback(
@@ -375,11 +401,24 @@ export function App() {
               // the header beside things that are about the whole board.
               action={
                 column.name === BACKLOG ? (
-                  <button className="go new" type="button" onClick={() => open(NEW)}>
-                    New ticket
-                  </button>
+                  <>
+                    <button className="go new" type="button" onClick={() => open(NEW)}>
+                      New ticket
+                    </button>
+                    {chosen.length > 0 && (
+                      <div className="commit">
+                        <button className="go" type="button" onClick={() => void act(commitAll())}>
+                          Commit {chosen.length}
+                        </button>
+                        <button type="button" onClick={() => setPicked(new Set())}>
+                          Clear
+                        </button>
+                      </div>
+                    )}
+                  </>
                 ) : undefined
               }
+              pick={column.name === BACKLOG ? pick : undefined}
               // Its own column too, where the drop means the end of it. Anywhere a
               // card can land says so before it is dropped rather than after.
               accepts={
@@ -507,6 +546,8 @@ function Column(props: {
   tickets: Ticket[];
   /** Something to do in this column, under its heading. Only the backlog has one. */
   action?: ReactNode;
+  /** A tick box for each card, where several can be moved at once. Only the backlog. */
+  pick?: (t: Ticket) => Picking;
   /** How this column is read, when it is the one column that can be sorted and cut down. */
   view?: DoneView;
   onView: (change: Partial<DoneView>) => void;
@@ -610,6 +651,7 @@ function Column(props: {
           onDragEnd={props.onDragEnd}
           onDrop={() => props.onDropOn(t)}
           onOpen={() => props.onOpen(t.id)}
+          pick={props.pick?.(t)}
         />
       ))}
     </div>
