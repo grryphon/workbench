@@ -5,6 +5,7 @@ import type { CodeHost, Verdict } from '../orchestrator/loop.ts';
 import {
   branchOnRemote,
   inHistoryOf,
+  isBranchName,
   push as pushBranch,
   worktreeFor,
   type GitConfig,
@@ -201,6 +202,10 @@ export async function resolveOn(
     }
   }
   if ('error' in target) return target;
+  // Before any git sees it — see `isBranchName`.
+  if (!(await isBranchName(target.branch))) {
+    return { error: `${target.branch} is not a branch name` };
+  }
   if (!(await branchOnRemote(cfg, target.branch))) {
     return { error: `origin has no branch ${target.branch} to work on` };
   }

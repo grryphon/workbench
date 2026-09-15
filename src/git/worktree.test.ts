@@ -13,6 +13,7 @@ import {
   create,
   diff,
   inHistoryOf,
+  isBranchName,
   push,
   refresh,
   remove,
@@ -20,6 +21,7 @@ import {
   unresolved,
   type GitConfig,
 } from './worktree.ts';
+import { resolveOn } from '../github/pr.ts';
 import { RemoteMoved } from '../orchestrator/describe.ts';
 
 const run = promisify(execFile);
@@ -266,6 +268,18 @@ test('a branch to work on is one the remote has', async () => {
 
     assert.equal(await branchOnRemote(cfg, 'their-feature'), true);
     assert.equal(await branchOnRemote(cfg, 'no-such'), false);
+
+    // A name that git would take as an option runs nothing, whichever way it arrives.
+    const pwned = path.join(path.dirname(cfg.repoRoot), 'PWNED');
+    const evil = `--upload-pack=touch ${pwned};git-upload-pack`;
+    assert.equal(await isBranchName(evil), false);
+    assert.equal(await isBranchName('-x'), false);
+    assert.equal(await isBranchName('feature/ok'), true);
+    assert.deepEqual(await resolveOn(cfg, evil), { error: `${evil} is not a branch name` });
+    assert.equal(await branchOnRemote(cfg, evil), false);
+    await assert.rejects(() => inHistoryOf(cfg, 'HEAD', evil));
+    await create(cfg, 't9', undefined, evil).catch(() => {});
+    assert.equal(await present(pwned), false, 'no fetch ran it as a command');
   } finally {
     await cleanUp(cfg);
   }

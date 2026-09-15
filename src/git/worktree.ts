@@ -221,7 +221,7 @@ export async function create(
  */
 async function startPoint(cfg: GitConfig, branch = cfg.base): Promise<string> {
   try {
-    await git(cfg.repoRoot, 'fetch', '--quiet', 'origin', branch);
+    await git(cfg.repoRoot, 'fetch', '--quiet', '--end-of-options', 'origin', branch);
     const remote = `origin/${branch}`;
     await git(cfg.repoRoot, 'rev-parse', '--verify', '--quiet', `${remote}^{commit}`);
     return remote;
@@ -231,12 +231,28 @@ async function startPoint(cfg: GitConfig, branch = cfg.base): Promise<string> {
 }
 
 /**
+ * Whether git would take this as a branch's name. Asked of a branch a ticket is written
+ * on before any other git command sees it: that name comes from whoever posted the
+ * ticket, and one like `--upload-pack=<command>` is an option to git, not a branch —
+ * one that runs the command. The fetches that take a branch end their options before
+ * it as well, so neither alone is what stands between a name and a shell.
+ */
+export async function isBranchName(name: string): Promise<boolean> {
+  try {
+    await run('git', ['check-ref-format', '--branch', name]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Whether the remote has this branch. Asked when a ticket is written on one, so a
  * typo is refused then rather than found by the first stage that tries to cut it.
  */
 export async function branchOnRemote(cfg: GitConfig, branch: string): Promise<boolean> {
   try {
-    await git(cfg.repoRoot, 'fetch', '--quiet', 'origin', branch);
+    await git(cfg.repoRoot, 'fetch', '--quiet', '--end-of-options', 'origin', branch);
     await git(cfg.repoRoot, 'rev-parse', '--verify', '--quiet', `origin/${branch}^{commit}`);
     return true;
   } catch {
@@ -254,7 +270,7 @@ export async function inHistoryOf(
   commit: string,
   branch: string,
 ): Promise<boolean> {
-  await git(cfg.repoRoot, 'fetch', '--quiet', 'origin', branch);
+  await git(cfg.repoRoot, 'fetch', '--quiet', '--end-of-options', 'origin', branch);
   try {
     await git(cfg.repoRoot, 'merge-base', '--is-ancestor', commit, `origin/${branch}`);
     return true;

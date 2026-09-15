@@ -422,6 +422,17 @@ test('a ticket can be written on a branch it does not own, resolved and checked 
   );
 });
 
+test('a branch to work on that git would read as an option is refused', async () => {
+  // Posted by anything that can reach the port, and later handed to `git fetch`.
+  await withApi(async (wb, store) => {
+    for (const on of ['--upload-pack=touch PWNED;git-upload-pack', '-x']) {
+      await assert.rejects(() => wb.create('evil', '', { on }), /is not a branch name/);
+    }
+    assert.equal(store.ticketIds().length, 0, 'and nothing was created');
+    assert.equal((await wb.create('fine', '', { on: 'feature/ok' })).on, 'feature/ok');
+  });
+});
+
 test('a ticket can be rewritten over HTTP', async () => {
   await withApi(async (wb) => {
     await wb.create('a thing', 'the details');

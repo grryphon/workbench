@@ -15,6 +15,7 @@ import { createDoc, deleteDoc, listDocs, writeDoc, type DocKind } from './docume
 import { applySettings, settings } from './settings.ts';
 import type { NameChecker } from '../run/nameCheck.ts';
 import type { Orchestrator } from '../orchestrator/loop.ts';
+import { isBranchName } from '../git/worktree.ts';
 
 /** The built board. `npm run build` puts it here; `npm run ui` serves it itself instead. */
 export const UI_DIST = fileURLToPath(new URL('../../ui/dist', import.meta.url));
@@ -322,6 +323,13 @@ async function handle(
         const resolved =
           deps.resolveOn === undefined ? { branch: onSaid } : await deps.resolveOn(onSaid);
         if ('error' in resolved) return send(res, 400, { error: resolved.error });
+        // Whatever resolved it, what is recorded is fetched, cut from and pushed to by
+        // name for the rest of the ticket's life, so it has to be a branch's name and
+        // not something git would read as an option. `resolveOn` asks the same before
+        // its own git runs; this is the gate for everything after.
+        if (!(await isBranchName(resolved.branch))) {
+          return send(res, 400, { error: `${resolved.branch} is not a branch name` });
+        }
         on = resolved.branch;
       }
 
