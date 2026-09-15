@@ -128,6 +128,8 @@ export type Workspace = {
     ticketId: string,
     /** The branch to start from, when this ticket carries on from another. */
     from?: string,
+    /** The branch standing in for the base, for a ticket on one it does not own. */
+    on?: string,
   ) => Promise<{ path: string; scratch: string; base: string | null }>;
   /**
    * Brings the base as the code host now has it into the ticket's branch, so the
@@ -148,6 +150,8 @@ export type Workspace = {
      * left to, so the default is to put the branch back as it was.
      */
     keepConflict?: boolean,
+    /** The branch standing in for the base, for a ticket on one it does not own. */
+    on?: string,
   ) => Promise<Refreshed>;
   /**
    * Of the paths a stage was handed a merge for, which ones it has not finished:
@@ -167,7 +171,7 @@ export type Workspace = {
    * is about to be offered or merged, because a branch that deletes what the base
    * just added is reverting somebody else's work rather than doing its own.
    */
-  removedFromBase: (ticketId: string, from?: string) => Promise<string[]>;
+  removedFromBase: (ticketId: string, from?: string, on?: string) => Promise<string[]>;
   /**
    * Records whatever a stage left behind, returning the commit or null when there
    * was nothing to record — normal for the stages that only read. The sha is kept:
@@ -184,6 +188,17 @@ export type CodeHost = {
   verdict: (ticket: Ticket) => Promise<Verdict>;
   /** Merges the offer, because the manager said so here rather than on the host. */
   merge: (ticket: Ticket) => Promise<void>;
+  /**
+   * Pushes a ticket on a branch it does not own back to that branch, as a fast-forward,
+   * instead of opening a pull request of its own. Throws `RemoteMoved` when the branch
+   * has moved on. `url` is the pull request already open on that branch, if any.
+   */
+  push: (ticket: Ticket) => Promise<{ commit: string; url?: string }>;
+  /**
+   * What became of the pull request that push went to — `pending` while nobody has
+   * decided. See `landed` in events.ts for what `squashed` means.
+   */
+  landed: (ticket: Ticket) => Promise<'pending' | 'merged' | 'squashed' | 'closed'>;
 };
 
 export type Deps = {
@@ -440,7 +455,9 @@ export function createOrchestrator(deps: Deps, opts: { pollMs?: number } = {}): 
 
       const action = nextAction(ticket, busy.size, policy, heldBy(ticket, tickets).length > 0);
       if (action.kind === 'wait') continue;
-      if (action.kind === 'poll_verdict' && !poll) continue;
+      // Watching a push is the same kind of read as polling a verdict, on the same timer.
+      const reading = action.kind === 'poll_verdict' || action.kind === 'watch_push';
+      if (reading && !poll) continue;
       // Only running a stage needs the model service. Opening a pull request, reading
       // a verdict and giving up are the workbench's own work and carry on regardless
       // — of being logged out, and of a session limit, which is the same kind of thing:
@@ -459,7 +476,7 @@ export function createOrchestrator(deps: Deps, opts: { pollMs?: number } = {}): 
       }
       if (action.kind === 'run_stage') busy.add(ticket.id);
 
-      if (action.kind !== 'poll_verdict') active = true;
+      if (!reading) active = true;
 
       const work = perform(ticket, action).finally(() => {
         // Free the slot first, then look for work: a tick that ran before this
@@ -484,6 +501,9 @@ export function createOrchestrator(deps: Deps, opts: { pollMs?: number } = {}): 
           break;
         case 'poll_verdict':
           await merging.pollVerdict(ticket);
+          break;
+        case 'watch_push':
+          await merging.watchPush(ticket);
           break;
         case 'merge_pr':
           await merging.mergePr(ticket);

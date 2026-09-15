@@ -99,6 +99,13 @@ export type EventBody =
        */
       continues?: string;
       /**
+       * A branch the workbench does not own — often one with somebody's pull request
+       * open on it — that this ticket works on and pushes its result back to. Always a
+       * branch name: a pull request named when the ticket was written is resolved to
+       * its branch before this is recorded.
+       */
+      on?: string;
+      /**
        * Whether the plan waits for the manager. Absent means it does, so every
        * ticket written before this existed keeps the gate it was created under.
        * Written only when it is `false`, because that is the half worth saying.
@@ -325,6 +332,18 @@ export type EventBody =
    */
   | { type: 'changes_requested'; changes: string }
   | { type: 'pr_opened'; url: string }
+  /**
+   * A ticket working on a branch it does not own pushed its work there, as a fast-forward.
+   * That is the end of the ticket: there is no pull request of its own to read a verdict
+   * from. `url` is the pull request already open on that branch, when there is one.
+   */
+  | { type: 'pushed'; branch: string; commit: string; url?: string }
+  /**
+   * What became of the pull request that push went to. `squashed` is merged with the
+   * pushed commit nowhere in the base's history — the commits never reached it as
+   * themselves, and anything built on them will clash with the base on every shared file.
+   */
+  | { type: 'landed'; how: 'merged' | 'squashed' | 'closed' }
   /** The workbench itself could not carry on — a worktree or a pull request failed. */
   | {
       type: 'blocked';

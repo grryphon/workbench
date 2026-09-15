@@ -48,6 +48,8 @@ export function TicketForm(props: {
     body: string;
     requiresApproval: boolean;
     waitsFor: string[];
+    /** A branch, `#123` or a pull request's URL to work on and push back to. Empty for none. */
+    on: string;
     commit: boolean;
   }) => Promise<unknown>;
   onCancel: () => void;
@@ -61,6 +63,7 @@ export function TicketForm(props: {
   const [body, setBody] = useState(props.body ?? '');
   const [requiresApproval, setRequiresApproval] = useState(props.requiresApproval ?? true);
   const [waitsFor, setWaitsFor] = useState<string[]>([]);
+  const [on, setOn] = useState('');
   const [saving, setSaving] = useState(false);
   /** A better name for this ticket, and the name it is better than. */
   const [suggestion, setSuggestion] = useState<{ for: string; name: string; why: string }>();
@@ -117,7 +120,7 @@ export function TicketForm(props: {
     if (title.trim() === '' || saving) return;
     setSaving(true);
     void props
-      .onSubmit({ title: joinTitle(prefix, title), body, requiresApproval, waitsFor, commit })
+      .onSubmit({ title: joinTitle(prefix, title), body, requiresApproval, waitsFor, on, commit })
       .finally(() => setSaving(false));
   };
 
@@ -194,6 +197,22 @@ export function TicketForm(props: {
           <span className="quiet">
             Once you commit to it, it runs nothing until every one of these has offered its work or
             ended.
+          </span>
+        </label>
+      )}
+
+      {/* Only when writing, like the one above: a ticket's branch is cut from what it
+          is on, so there is no later moment to say it. */}
+      {props.tickets !== undefined && (
+        <label>
+          On branch
+          <input
+            value={on}
+            placeholder="a branch, #123 or a pull request URL — empty for the base"
+            onChange={(e) => setOn(e.target.value)}
+          />
+          <span className="quiet">
+            Works on that branch instead of the base, and pushes the finished work back to it.
           </span>
         </label>
       )}

@@ -172,7 +172,7 @@ export function whatHappenedTo(ticket: Ticket, events: readonly Event[]): string
   return lines.join('\n');
 }
 
-function whereYouAre({ worktree, scratch, absent, agent }: BriefInput): string {
+function whereYouAre({ ticket, worktree, scratch, absent, agent }: BriefInput): string {
   const lines = [
     `\`${worktree}\``,
     '',
@@ -180,6 +180,16 @@ function whereYouAre({ worktree, scratch, absent, agent }: BriefInput): string {
     'Paths outside it are refused — including the main checkout of this same',
     'repository, which is a different directory with the same files in it.',
   ];
+
+  if (ticket.on !== null) {
+    lines.push(
+      '',
+      `It is cut from \`${ticket.on}\`, a branch the workbench does not own — often one`,
+      'with somebody else’s pull request open on it. The change is measured against that',
+      'branch, not the base, and when this ticket is finished its work is pushed back to it',
+      'for whoever owns it to see.',
+    );
+  }
 
   if (absent !== undefined && absent.length > 0) {
     lines.push(

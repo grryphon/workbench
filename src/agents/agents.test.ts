@@ -483,6 +483,26 @@ test('the stages that cannot write are not told about a place to write', () => {
   }
 });
 
+test('a ticket on somebody else’s branch is told whose it is and where the work goes', () => {
+  const on = buildBrief({
+    ticket: ticketFrom([{ ...CREATED, on: 'their-feature' } as typeof CREATED]),
+    agent: agents.implement,
+    worktree: '/tmp/wb/t1',
+  });
+  assert.match(
+    on,
+    /Where you are working[\s\S]*`their-feature`, a branch the workbench does not own/,
+  );
+  assert.match(on, /pushed back to it/);
+
+  const plain = buildBrief({
+    ticket: ticketFrom([CREATED]),
+    agent: agents.implement,
+    worktree: '/tmp/wb/t1',
+  });
+  assert.doesNotMatch(plain, /a branch the workbench does not own/, 'and no other ticket is');
+});
+
 test('every brief says where the agent is, and what is deliberately not there', () => {
   // Live runs opened by reading the main checkout, being refused, working out they
   // were in a worktree, and reading the same files again — four wasted calls in

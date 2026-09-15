@@ -15,6 +15,8 @@ workbench — a board of tickets that agents work through
   wb new <title> [body]        write a ticket down, in the backlog
   wb new --from <id> <title> [body]
                                carry on from a ticket, starting on its branch
+  wb new --on <branch|#n|url> <title> [body]
+                               work on a branch you do not own, and push the result back to it
   wb new --no-approval <title> [body]
                                let its plan go straight on to being built
   wb new --after <a,b> <title> [body]

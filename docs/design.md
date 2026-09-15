@@ -143,6 +143,18 @@ workbench that was most of the conflicts the board hit.
 The one-line-per-ticket history a squash gave is not lost — `git log --first-parent` reads
 it, which is why the merge commit's subject is `<title> (<id>)`.
 
+That rule is about the workbench's own work, and it stops there. A ticket written with
+`--on` works on a branch the workbench does not own — often one with somebody's pull
+request open on it — and finishes by pushing to that branch as a fast-forward. What it
+promises is the commits it pushed, and nothing about how that branch later reaches the
+base: that is decided in a repository the workbench only runs in, by people whose merge
+settings it cannot change. So it does the two things it can. It says so on that pull
+request, where the choice to squash is made: this branch carries work other work builds
+on, so merge it rather than squashing. And once the pull request has merged, it checks
+whether the commit it pushed is in the base's history — after a squash it is not — and
+says plainly which ticket's work now has no ancestry, rather than leaving it to turn up
+later as conflicts nobody can explain.
+
 ## A conflict is work, not a question
 
 Merging one pull request refreshes every other, so one merge can leave several offered

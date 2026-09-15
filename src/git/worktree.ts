@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import type { Refreshed } from '../domain/events.ts';
 import type { Workspace } from '../orchestrator/loop.ts';
+import { RemoteMoved } from '../orchestrator/describe.ts';
 
 const run = promisify(execFile);
 
@@ -15,11 +16,12 @@ const run = promisify(execFile);
  */
 export function gitWorkspace(cfg: GitConfig): Workspace {
   return {
-    prepare: (ticketId, from) => create(cfg, ticketId, from),
-    refresh: (ticketId, alsoMerge, keepConflict) => refresh(cfg, ticketId, alsoMerge, keepConflict),
+    prepare: (ticketId, from, on) => create(cfg, ticketId, from, on),
+    refresh: (ticketId, alsoMerge, keepConflict, on) =>
+      refresh(cfg, ticketId, alsoMerge, keepConflict, on),
     unresolved: (ticketId, paths) => unresolved(cfg, ticketId, paths),
     abandonMerge: (ticketId) => abandonMerge(cfg, ticketId),
-    removedFromBase: (ticketId, from) => removedFromBase(cfg, ticketId, from),
+    removedFromBase: (ticketId, from, on) => removedFromBase(cfg, ticketId, from, on),
     commit: (ticket, message) => commitAll(worktreeFor(cfg, ticket.id), message),
     discard: (ticketId) => remove(cfg, ticketId),
   };
@@ -157,6 +159,12 @@ export async function create(
    * guard: the whole reason work that stopped is otherwise unreachable.
    */
   from?: string,
+  /**
+   * The branch that stands in for the base, for a ticket on one the workbench does not
+   * own: cut from it as the remote has it, the same way an ordinary ticket is cut from
+   * the base.
+   */
+  on?: string,
 ): Promise<Branched> {
   const wt = worktreeFor(cfg, ticketId);
   // Every call, not only the first: a stage that runs after a restart finds the
@@ -182,7 +190,7 @@ export async function create(
         await git(cfg.repoRoot, 'worktree', 'add', wt.path, wt.branch);
         return null;
       }
-      const startFrom = from ?? (await startPoint(cfg));
+      const startFrom = from ?? (await startPoint(cfg, on));
       const cut = (await git(cfg.repoRoot, 'rev-parse', startFrom)).trim();
       await git(cfg.repoRoot, 'worktree', 'add', '-b', wt.branch, wt.path, startFrom);
       return cut;
@@ -206,16 +214,55 @@ export async function create(
  *
  * Falls back to the local base when there is no remote, so a repository without
  * one still works.
+ *
+ * `branch` is the base for a ticket on somebody else's branch — `Ticket.on` — which is
+ * cut from, refreshed against and measured from that branch exactly as any other
+ * ticket is from the base.
  */
-async function startPoint(cfg: GitConfig): Promise<string> {
+async function startPoint(cfg: GitConfig, branch = cfg.base): Promise<string> {
   try {
-    await git(cfg.repoRoot, 'fetch', '--quiet', 'origin', cfg.base);
-    const remote = `origin/${cfg.base}`;
+    await git(cfg.repoRoot, 'fetch', '--quiet', 'origin', branch);
+    const remote = `origin/${branch}`;
     await git(cfg.repoRoot, 'rev-parse', '--verify', '--quiet', `${remote}^{commit}`);
     return remote;
   } catch {
-    return cfg.base;
+    return branch;
   }
+}
+
+/**
+ * Whether the remote has this branch. Asked when a ticket is written on one, so a
+ * typo is refused then rather than found by the first stage that tries to cut it.
+ */
+export async function branchOnRemote(cfg: GitConfig, branch: string): Promise<boolean> {
+  try {
+    await git(cfg.repoRoot, 'fetch', '--quiet', 'origin', branch);
+    await git(cfg.repoRoot, 'rev-parse', '--verify', '--quiet', `origin/${branch}^{commit}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pushes a ticket's work to a branch the workbench does not own, as a fast-forward and
+ * as nothing else: no force flag, no plus-sign refspec. That branch is somebody's, often under
+ * a pull request they are reading, and overwriting what they pushed is never the fix.
+ *
+ * @returns the commit pushed.
+ * @throws RemoteMoved when the branch has commits this one has not taken in — the
+ *   caller's to answer by refreshing and pushing again.
+ */
+export async function push(cfg: GitConfig, ticketId: string, to: string): Promise<string> {
+  const wt = worktreeFor(cfg, ticketId);
+  try {
+    await git(wt.path, 'push', 'origin', `HEAD:refs/heads/${to}`);
+  } catch (error) {
+    const stderr = String((error as { stderr?: unknown }).stderr ?? '');
+    if (/non-fast-forward|fetch first/i.test(stderr)) throw new RemoteMoved(to);
+    throw error;
+  }
+  return (await git(wt.path, 'rev-parse', 'HEAD')).trim();
 }
 
 /**
@@ -528,6 +575,12 @@ export async function refresh(
    * nobody left to resolve it and an untouched branch is the kinder answer.
    */
   keepConflict = false,
+  /**
+   * The branch that stands in for the base, for a ticket on one the workbench does not
+   * own. Taken in from the remote exactly as the base is, so a push back to it is a
+   * fast-forward, and a clash with it is work like a clash with the base.
+   */
+  on?: string,
 ): Promise<Refreshed> {
   const wt = worktreeFor(cfg, ticketId);
 
@@ -555,7 +608,7 @@ export async function refresh(
     };
   }
 
-  const base = (await git(wt.path, 'rev-parse', await startPoint(cfg))).trim();
+  const base = (await git(wt.path, 'rev-parse', await startPoint(cfg, on))).trim();
 
   const wanted: string[] = [];
   for (const ref of [base, ...alsoMerge]) {
@@ -686,9 +739,11 @@ export async function removedFromBase(
   cfg: GitConfig,
   ticketId: string,
   from?: string,
+  /** The branch standing in for the base, for a ticket on one it does not own. */
+  on?: string,
 ): Promise<string[]> {
   const wt = worktreeFor(cfg, ticketId);
-  const base = (await git(wt.path, 'rev-parse', await startPoint(cfg))).trim();
+  const base = (await git(wt.path, 'rev-parse', await startPoint(cfg, on))).trim();
 
   // Only a base the branch already has can be asked this. The base is resolved
   // here a second time, with its own fetch, and it can differ from the one the

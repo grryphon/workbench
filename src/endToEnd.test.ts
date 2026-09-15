@@ -83,6 +83,10 @@ async function rig(checks: string[] = []): Promise<Rig> {
       },
       verdict: async () => ({ kind: 'pending' }),
       merge: async () => {},
+      push: async () => {
+        throw new Error('no ticket here is on somebody else’s branch');
+      },
+      landed: async () => 'pending',
     },
     runStage: (args) => {
       resumed.push(args.resume);

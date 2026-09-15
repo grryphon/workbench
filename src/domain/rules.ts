@@ -22,6 +22,11 @@ export type Action =
   | { kind: 'run_stage'; stage: Stage }
   | { kind: 'open_pr' }
   | { kind: 'poll_verdict' }
+  /**
+   * Ask what became of the pull request a push to somebody else's branch went to. The
+   * ticket is done; this is only noticing, afterwards, whether the work was squashed.
+   */
+  | { kind: 'watch_push' }
   /** The manager asked for the merge here rather than on the code host. */
   | { kind: 'merge_pr' }
   /** Stop the ticket: it has gone round too many times, or cost too much. */
@@ -156,8 +161,14 @@ export function nextAction(t: Ticket, running: number, p: Policy, held = false):
     case 'plan_gate': // waiting on approval
     case 'cancelled':
     case 'gave_up':
-    case 'done':
       return { kind: 'wait' };
+
+    // Finished either way. A push to a pull request nobody has decided yet is watched,
+    // because a squash there is found out now or as unexplained conflicts much later.
+    case 'done':
+      return t.pushed !== null && t.pushed.url !== null && t.pushed.landed === null
+        ? { kind: 'watch_push' }
+        : { kind: 'wait' };
 
     case 'awaiting_verdict':
       // A merge asked for is an answer already given, so there is nothing to poll for.

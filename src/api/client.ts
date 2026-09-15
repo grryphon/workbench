@@ -62,13 +62,15 @@ export function createClient(baseUrl: string) {
 
     /**
      * `from` starts the ticket on another ticket's branch, carrying on its work.
+     * `on` works on a branch the workbench does not own — a name, `#123` or a pull
+     * request's URL — and pushes the result back to it.
      * `requiresApproval: false` lets the plan go straight on to being built.
      * `waitsFor` holds it until those tickets have offered their work or ended.
      */
     create: (
       title: string,
       body: string,
-      how: { from?: string; requiresApproval?: boolean; waitsFor?: string[] } = {},
+      how: { from?: string; on?: string; requiresApproval?: boolean; waitsFor?: string[] } = {},
     ) => post<{ ticket: Ticket }>('/tickets', { title, body, ...how }).then((r) => r.ticket),
 
     /**

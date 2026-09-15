@@ -382,6 +382,46 @@ test('a ticket can carry on from one that left work behind', async () => {
   });
 });
 
+test('a ticket can be written on a branch it does not own, resolved and checked first', async () => {
+  const looked: string[] = [];
+  await withApi(
+    async (wb, store) => {
+      const on = await wb.create('fix their work', '', { on: '#123' });
+      assert.equal(on.on, 'their-feature', 'the pull request is recorded as its branch');
+      assert.equal(on.continues, null);
+
+      await assert.rejects(() => wb.create('fork', '', { on: '#9' }), /from a fork/);
+      await assert.rejects(() => wb.create('typo', '', { on: 'no-such' }), /no branch no-such/);
+      assert.deepEqual(looked, ['#123', '#9', 'no-such'], 'every one was asked about');
+
+      // Where it starts is one thing or the other, and refused before anything is asked.
+      store.append('t1', { type: 'stage_started', stage: 'implement', runId: 'r1' });
+      store.append('t1', {
+        type: 'stage_finished',
+        runId: 'r1',
+        outcome: 'completed',
+        summary: 'wrote it',
+        commit: 'abc1234',
+      });
+      await assert.rejects(
+        () => wb.create('both', '', { from: 't1', on: 'their-feature' }),
+        /not both/,
+      );
+      assert.equal(looked.length, 3);
+      assert.equal(store.ticketIds().length, 1, 'and nothing refused was created');
+    },
+    {
+      resolveOn: async (ref) => {
+        looked.push(ref);
+        if (ref === '#123') return { branch: 'their-feature' };
+        if (ref === '#9')
+          return { error: '#9 is from a fork, and the workbench can only push to origin' };
+        return { error: `origin has no branch ${ref} to work on` };
+      },
+    },
+  );
+});
+
 test('a ticket can be rewritten over HTTP', async () => {
   await withApi(async (wb) => {
     await wb.create('a thing', 'the details');

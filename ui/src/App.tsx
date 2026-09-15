@@ -420,6 +420,7 @@ export function App() {
                 wb
                   .create(fields.title, fields.body, {
                     from: from ?? undefined,
+                    on: fields.on.trim() || undefined,
                     requiresApproval: fields.requiresApproval,
                     waitsFor: fields.waitsFor,
                   })

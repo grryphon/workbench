@@ -2,7 +2,7 @@ import { ended, type Ticket } from '../domain/ticket.ts';
 import { carriedWork } from '../domain/rules.ts';
 import type { Refreshed } from '../domain/events.ts';
 import type { Branch } from './branch.ts';
-import { describe, describeRef } from './describe.ts';
+import { describe, describeRef, RemoteMoved } from './describe.ts';
 import type { Deps, RunResult, Verdict } from './loop.ts';
 
 /**
@@ -29,6 +29,8 @@ export type Merging = {
   /** Offers the ticket's work, and says whether it got as far as offering it. */
   openPr: (ticket: Ticket) => Promise<boolean>;
   pollVerdict: (ticket: Ticket) => Promise<void>;
+  /** Records what became of the pull request a push went to, and says so if it was squashed. */
+  watchPush: (ticket: Ticket) => Promise<void>;
   mergePr: (ticket: Ticket) => Promise<void>;
   /** Whether a merge holds the gate, so another one may not start. */
   merging: () => boolean;
@@ -164,8 +166,37 @@ export function createMerging({
     // Offered against the code that exists, not the code that did when the branch
     // was cut. A ticket that cannot be brought up to date is not offered at all.
     if (!(await refresh(ticket, worktree, settling))) return false;
+    if (ticket.on !== null) return await pushBack(ticket, ticket.on, worktree);
     const url = await deps.host.openPr(ticket);
     store.append(ticket.id, { type: 'pr_opened', url });
+    return true;
+  }
+
+  /**
+   * Offering, for a ticket on a branch the workbench does not own: the work is pushed
+   * back to that branch rather than to a pull request of its own, and the push landing
+   * is the end of the ticket. See "The workbench owns how work lands" in docs/design.md.
+   *
+   * A branch that moved on while this was being offered is taken in and pushed again,
+   * once. What that refresh cannot settle blocks the ticket like any other clash, and a
+   * second refusal throws — `perform` parks the ticket with it. Never a force: the work
+   * stands on `wb/<id>` for a person to take from there.
+   */
+  async function pushBack(ticket: Ticket, on: string, worktree: string): Promise<boolean> {
+    let pushed: { commit: string; url?: string };
+    try {
+      pushed = await deps.host.push(ticket);
+    } catch (error) {
+      if (!(error instanceof RemoteMoved)) throw error;
+      if (!(await refresh(store.ticket(ticket.id), worktree, 'no'))) return false;
+      pushed = await deps.host.push(store.ticket(ticket.id));
+    }
+    store.append(ticket.id, {
+      type: 'pushed',
+      branch: on,
+      commit: pushed.commit,
+      ...(pushed.url === undefined ? {} : { url: pushed.url }),
+    });
     return true;
   }
 
@@ -202,6 +233,8 @@ export function createMerging({
       branch.awaitedBranches(ticket),
       // Left on disk only where there is something that will finish it.
       settling !== 'no',
+      // For a ticket on a branch it does not own, that branch is what it is kept current with.
+      ticket.on ?? undefined,
     );
 
     if (result.kind !== 'up-to-date') {
@@ -276,7 +309,11 @@ export function createMerging({
     // just gained is missing from the branch and every ticket would park. An
     // up-to-date branch is asked too — a resolution reverts just as well as a merge
     // does, and it leaves the base exactly where it was.
-    const removed = await deps.workspace.removedFromBase(ticket.id, ticket.base ?? undefined);
+    const removed = await deps.workspace.removedFromBase(
+      ticket.id,
+      ticket.base ?? undefined,
+      ticket.on ?? undefined,
+    );
     if (removed.length > 0) {
       store.append(ticket.id, {
         type: 'blocked',
@@ -503,6 +540,36 @@ export function createMerging({
   }
 
   /**
+   * What became of the pull request a push to somebody else's branch went to.
+   *
+   * The workbench cannot stop a squash in a repository it does not run, so it notices
+   * one: said plainly, naming the commit that now has no ancestry in the base, rather
+   * than left to surface as add/add conflicts in whichever ticket builds on it next.
+   * A host that cannot be asked is asked again on the next poll, like a verdict.
+   */
+  async function doWatchPush(ticket: Ticket): Promise<void> {
+    const pushed = ticket.pushed;
+    if (pushed === null) return;
+    let how: Awaited<ReturnType<typeof deps.host.landed>>;
+    try {
+      how = await deps.host.landed(ticket);
+    } catch {
+      return;
+    }
+    if (how === 'pending') return;
+
+    store.append(ticket.id, { type: 'landed', how });
+    if (how === 'squashed') {
+      deps.announce(
+        `⚠️  ${ticket.id}: the pull request on ${pushed.branch} was squashed. ` +
+          `${pushed.commit.slice(0, 8)}, which ${ticket.id} pushed there, is not in the base's ` +
+          'history, so that work has no ancestry: anything built on those commits will ' +
+          'conflict with the base on every file they share.',
+      );
+    }
+  }
+
+  /**
    * The manager said merge it, here rather than on the code host.
    *
    * The base goes in first, and a clash gets the one resolution attempt every other
@@ -550,6 +617,7 @@ export function createMerging({
   return {
     openPr: doOpenPr,
     pollVerdict: doPollVerdict,
+    watchPush: doWatchPush,
     mergePr: doMergePr,
     merging: () => mergeGate.size > 0,
 

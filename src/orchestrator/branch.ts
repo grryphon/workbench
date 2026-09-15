@@ -28,6 +28,8 @@ export function createBranch(deps: Deps): Branch {
       // A ticket that continues another starts from that one's branch, so its
       // work is on disk here rather than stranded where nothing can read it.
       ticket.continues === null ? undefined : `wb/${ticket.continues}`,
+      // A ticket on somebody else's branch is cut from that branch instead of the base.
+      ticket.on ?? undefined,
     );
     if (base !== null) {
       store.append(ticket.id, { type: 'branched', branch: ticket.branch, base });
@@ -61,7 +63,7 @@ export function createBranch(deps: Deps): Branch {
     const branches = awaitedBranches(ticket);
     if (branches.length === 0) return;
 
-    const result = await deps.workspace.refresh(ticket.id, branches);
+    const result = await deps.workspace.refresh(ticket.id, branches, false, ticket.on ?? undefined);
     if (result.kind === 'up-to-date') return;
 
     // Recorded against the merge rather than the commit the branch was cut from,
@@ -124,7 +126,7 @@ export function createBranch(deps: Deps): Branch {
     // nothing of it left to take. A dependency offered since is brought in when the
     // work is — see the conflicted branch of `refresh` in merging.ts, which is where a
     // clash with one is handed to a run.
-    const result = await deps.workspace.refresh(ticket.id, [], true);
+    const result = await deps.workspace.refresh(ticket.id, [], true, ticket.on ?? undefined);
     if (result.kind === 'up-to-date') return { merged: false };
 
     if (result.kind === 'merged') {

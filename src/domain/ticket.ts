@@ -38,6 +38,24 @@ export type Ticket = {
   /** The ticket this one carries on from, and whose branch it started on. */
   continues: string | null;
   /**
+   * The branch this ticket works on and pushes back to, when it is one the workbench
+   * does not own. Its worktree is cut from that branch as the remote has it, the base
+   * it is measured against moves with it, and finishing is a push there rather than a
+   * pull request of its own.
+   */
+  on: string | null;
+  /**
+   * What was pushed to `on`, and what became of the pull request on that branch once
+   * somebody decided. Null until the push lands; `landed` is null until then too, and
+   * stays null for a branch with no pull request, where there is nothing to watch.
+   */
+  pushed: {
+    branch: string;
+    commit: string;
+    url: string | null;
+    landed: 'merged' | 'squashed' | 'closed' | null;
+  } | null;
+  /**
    * Tickets this one must not start ahead of. Nothing runs while any of them is
    * unmet — see `heldBy`, which says what meeting one takes, and `awaitedWork`,
    * which says what of theirs this branch is then built on.
@@ -254,6 +272,8 @@ function blank(id: string): Ticket {
     settling: false,
     branch: `wb/${id}`,
     continues: null,
+    on: null,
+    pushed: null,
     waitsFor: [],
     requiresApproval: true,
     plan: null,
@@ -327,6 +347,7 @@ export function applyEvent(t: Ticket, e: Event): Ticket {
         title: e.title,
         body: e.body,
         continues: e.continues ?? null,
+        on: e.on ?? null,
         requiresApproval: e.requiresApproval ?? true,
       };
 
@@ -660,6 +681,25 @@ export function applyEvent(t: Ticket, e: Event): Ticket {
 
     case 'pr_opened':
       return { ...t, status: 'awaiting_verdict', prUrl: e.url, offered: true };
+
+    // The end of a ticket on somebody else's branch. Nothing is offered and nothing
+    // waits on the manager: the push is what finishing is, and how that branch reaches
+    // the base is decided by whoever owns it.
+    case 'pushed':
+      return {
+        ...t,
+        status: 'done',
+        offered: false,
+        mergeRequested: false,
+        queuedBehind: null,
+        conflicts: [],
+        conflictedWith: null,
+        pushed: { branch: e.branch, commit: e.commit, url: e.url ?? null, landed: null },
+        ...movedOn,
+      };
+
+    case 'landed':
+      return t.pushed === null ? t : { ...t, pushed: { ...t.pushed, landed: e.how } };
 
     case 'blocked':
       // An ended ticket stays ended. Nothing should be parking one in the first

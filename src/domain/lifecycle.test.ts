@@ -650,6 +650,52 @@ test('happy path: created to merged', () => {
   assert.deepEqual(j.next(), { kind: 'wait' });
 });
 
+test('a ticket on somebody else’s branch is done when its push lands', () => {
+  const j = new Journal();
+  const created = j.add({ type: 'ticket_created', title: 'fix it', body: '', on: 'their-feature' });
+  assert.equal(created.on, 'their-feature');
+  assert.equal(created.pushed, null);
+  assert.equal(newTicket().ticket().on, null, 'and any other ticket is on nothing');
+
+  j.add({ type: 'queued' });
+  runStage(j, 'plan');
+  j.add({ type: 'plan_approved' });
+  runStage(j, 'implement');
+  runStage(j, 'review');
+  runStage(j, 'verify');
+  assert.deepEqual(j.next(), { kind: 'open_pr' }, 'offered the same way; the loop pushes');
+
+  const done = j.add({ type: 'pushed', branch: 'their-feature', commit: 'abc1234' });
+  assert.equal(done.status, 'done');
+  assert.equal(done.offered, false, 'nothing waits on the manager');
+  assert.equal(done.prUrl, null);
+  assert.deepEqual(done.pushed, {
+    branch: 'their-feature',
+    commit: 'abc1234',
+    url: null,
+    landed: null,
+  });
+  assert.deepEqual(j.next(), { kind: 'wait' }, 'with no pull request there is nothing to watch');
+});
+
+test('the pull request a push went to is watched until it lands, and how it landed is kept', () => {
+  const j = new Journal();
+  j.add({ type: 'ticket_created', title: 'fix it', body: '', on: 'their-feature' });
+  j.add({
+    type: 'pushed',
+    branch: 'their-feature',
+    commit: 'abc1234',
+    url: 'https://example/pr/5',
+  });
+  assert.deepEqual(j.next(), { kind: 'watch_push' });
+  assert.deepEqual(j.next(3), { kind: 'watch_push' }, 'a read, so it needs no slot');
+
+  const squashed = j.add({ type: 'landed', how: 'squashed' });
+  assert.equal(squashed.pushed?.landed, 'squashed');
+  assert.equal(squashed.status, 'done');
+  assert.deepEqual(j.next(), { kind: 'wait' }, 'and then it is left alone');
+});
+
 /** Offered and waiting on the manager, which is where a merge is asked for. */
 function offeredTicket(): Journal {
   const j = newTicket();

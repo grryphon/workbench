@@ -115,6 +115,12 @@ export function Detail(props: {
               <a href={`#${t.continues}`}>{t.continues}</a>
             </>
           )}
+          {t.on !== null && (
+            <>
+              {' · on '}
+              <span className="mono">{t.on}</span>
+            </>
+          )}
           {t.waitsFor.map((id) => (
             <span key={id}>
               {' · waits for '}
@@ -130,6 +136,33 @@ export function Detail(props: {
             </>
           )}
         </div>
+
+        {/* Where the work went, for a ticket on somebody else's branch: there is no
+            pull request of its own to point at, and a squash is worth saying plainly. */}
+        {t.pushed !== null && (
+          <p>
+            Pushed to <span className="mono">{t.pushed.branch}</span> at{' '}
+            <span className="mono">{t.pushed.commit.slice(0, 8)}</span>
+            {t.pushed.url !== null && (
+              <>
+                {', where '}
+                <a href={t.pushed.url} target="_blank" rel="noreferrer">
+                  a pull request
+                </a>
+                {' picks it up'}
+              </>
+            )}
+            {t.pushed.landed === 'merged' && '. That pull request has since been merged.'}
+            {t.pushed.landed === 'closed' && '. That pull request was closed without merging.'}
+            {t.pushed.landed === 'squashed' && (
+              <strong>
+                {'. That pull request was squashed: this commit is not in the base’s history, so ' +
+                  'anything built on it will conflict with the base on every file they share.'}
+              </strong>
+            )}
+            {t.pushed.landed === null && '.'}
+          </p>
+        )}
 
         {t.question !== null && (
           <div className="box ask">
@@ -564,6 +597,12 @@ function Git({ ticket: t }: { ticket: Ticket }) {
           <>
             <dt>continues</dt>
             <dd className="mono">{t.continues}</dd>
+          </>
+        )}
+        {t.on !== null && (
+          <>
+            <dt>on</dt>
+            <dd className="mono">{t.on}</dd>
           </>
         )}
         {t.base !== null && (
@@ -1127,6 +1166,10 @@ function detail(e: Event): string {
       return first(e.changes);
     case 'pr_opened':
       return e.url;
+    case 'pushed':
+      return `${e.branch} at ${e.commit.slice(0, 8)}`;
+    case 'landed':
+      return e.how;
     case 'verdict':
       return e.verdict;
     case 'branched':

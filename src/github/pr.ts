@@ -2,7 +2,13 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import type { CodeHost, Verdict } from '../orchestrator/loop.ts';
-import { worktreeFor, type GitConfig, type Worktree } from '../git/worktree.ts';
+import {
+  branchOnRemote,
+  push as pushBranch,
+  worktreeFor,
+  type GitConfig,
+  type Worktree,
+} from '../git/worktree.ts';
 
 const run = promisify(execFile);
 
@@ -10,7 +16,7 @@ const run = promisify(execFile);
  * GitHub as the orchestrator's code host. The only place that knows a ticket is
  * offered as a pull request, and the only place that writes what one says.
  */
-export function githubHost(cfg: GitConfig): CodeHost {
+export function githubHost(cfg: GitConfig, announce: (message: string) => void): CodeHost {
   return {
     openPr: (ticket) =>
       openPr(worktreeFor(cfg, ticket.id), {
@@ -30,7 +36,162 @@ export function githubHost(cfg: GitConfig): CodeHost {
         mergeSubject(ticket.title, ticket.id),
       );
     },
+    push: async (ticket) => {
+      if (ticket.on === null) throw new Error('no branch of somebody else’s to push to');
+      const commit = await pushBranch(cfg, ticket.id, ticket.on);
+      const url = await pullRequestOn(cfg.repoRoot, ticket.on, announce);
+      return url === null ? { commit } : { commit, url };
+    },
+    landed: async (ticket) => {
+      const pushed = ticket.pushed;
+      if (pushed === null || pushed.url === null) throw new Error('no pull request to watch');
+      const { stdout } = await run(
+        'gh',
+        ['pr', 'view', pushed.url, '--json', 'state,baseRefName'],
+        {
+          cwd: cfg.repoRoot,
+        },
+      );
+      const pr = JSON.parse(stdout) as { state?: string; baseRefName?: string };
+      if (pr.state === 'CLOSED') return 'closed';
+      if (pr.state !== 'MERGED') return 'pending';
+      // Merged, and whether as itself is a question for the branch it merged into, which
+      // is the base unless the pull request said otherwise. A squash — or a rebase —
+      // leaves the same content there under commits the pushed one is not an ancestor of.
+      const into = pr.baseRefName || cfg.base;
+      await run('git', ['fetch', '--quiet', 'origin', into], { cwd: cfg.repoRoot });
+      return run('git', ['merge-base', '--is-ancestor', pushed.commit, `origin/${into}`], {
+        cwd: cfg.repoRoot,
+      }).then(
+        () => 'merged' as const,
+        () => 'squashed' as const,
+      );
+    },
   };
+}
+
+/**
+ * What marks a pull request as already carrying `SQUASH_NOTE`, so it is added once
+ * however many times the branch is pushed to. A comment, so nobody reads it.
+ */
+const NOTE_MARK = '<!-- workbench: merge, do not squash -->';
+
+/**
+ * Said on the pull request because that is where the decision to squash is made, and
+ * the workbench cannot change the settings of a repository it only runs in.
+ */
+const SQUASH_NOTE = [
+  NOTE_MARK,
+  '**Please merge this pull request rather than squashing it.** This branch carries work',
+  'that other work is built on. A squash lands the same changes under a new commit, so',
+  'those commits never reach the base as themselves — and everything built on them then',
+  'conflicts with the base on every file they share, for no reason anyone can see.',
+].join('\n');
+
+/**
+ * A pull request's description with the note against squashing on the end — or as it
+ * was, when the note is already there. Its own function, like `reusablePr`, so it can
+ * be tested without a network.
+ */
+export function withNote(body: string): string {
+  if (body.includes(NOTE_MARK)) return body;
+  return body.trim() === '' ? SQUASH_NOTE : `${body.trimEnd()}\n\n${SQUASH_NOTE}`;
+}
+
+/**
+ * The pull request open on a branch, which picks up whatever was just pushed there, or
+ * null when the branch has none — a colleague's work in progress, a release branch.
+ *
+ * The first time the workbench meets one it asks, on it, for a merge rather than a
+ * squash. Not being able to say so is announced rather than blocking: the push has
+ * landed, and the watch afterwards still notices a squash.
+ */
+async function pullRequestOn(
+  cwd: string,
+  branch: string,
+  announce: (message: string) => void,
+): Promise<string | null> {
+  let pr: { url?: string; state?: string; body?: string };
+  try {
+    const { stdout } = await run('gh', ['pr', 'view', branch, '--json', 'url,state,body'], { cwd });
+    pr = JSON.parse(stdout) as typeof pr;
+  } catch {
+    // `gh` fails when there is no pull request to view, which is an ordinary case here.
+    return null;
+  }
+  if (pr.state !== 'OPEN' || !pr.url) return null;
+
+  const body = pr.body ?? '';
+  if (withNote(body) !== body) {
+    try {
+      await run('gh', ['pr', 'edit', pr.url, '--body', withNote(body)], { cwd });
+    } catch (error) {
+      announce(
+        `⚠️  could not ask ${pr.url} to be merged rather than squashed: ` +
+          (error instanceof Error ? error.message : String(error)),
+      );
+    }
+  }
+  return pr.url;
+}
+
+/**
+ * The branch a ticket written `on` a pull request works on, out of what
+ * `gh pr view --json headRefName,isCrossRepository,state` says about it — or why it
+ * cannot. Its own function, like `reusablePr`, so the decision can be tested without
+ * a network.
+ *
+ * A fork's branch is refused: pushing there means a remote of its own, and everything
+ * downstream reads `origin/`. So is a pull request that is no longer open, whose branch
+ * nobody is going to merge again — name the branch itself to work on it anyway.
+ */
+export function readTarget(stdout: string, ref: string): { branch: string } | { error: string } {
+  const pr = JSON.parse(stdout) as {
+    headRefName?: string;
+    isCrossRepository?: boolean;
+    state?: string;
+  };
+  if (pr.isCrossRepository === true) {
+    return { error: `${ref} is from a fork, and the workbench can only push to origin` };
+  }
+  if (pr.state !== 'OPEN') {
+    return {
+      error: `${ref} is ${(pr.state ?? 'not open').toLowerCase()}; name its branch to work on it anyway`,
+    };
+  }
+  if (!pr.headRefName) return { error: `could not read a branch from ${ref}` };
+  return { branch: pr.headRefName };
+}
+
+/**
+ * What a ticket written `on` something means: a branch name as it stands, or `#123`
+ * and a pull request's URL looked up through `gh`. Whichever it was, the branch has
+ * to be on origin — see `ApiDeps.resolveOn`.
+ */
+export async function resolveOn(
+  cfg: GitConfig,
+  ref: string,
+): Promise<{ branch: string } | { error: string }> {
+  let target: { branch: string } | { error: string } = { branch: ref };
+  if (/^#\d+$/.test(ref) || /^https?:\/\//.test(ref)) {
+    try {
+      const { stdout } = await run(
+        'gh',
+        ['pr', 'view', ref.replace(/^#/, ''), '--json', 'headRefName,isCrossRepository,state'],
+        { cwd: cfg.repoRoot },
+      );
+      target = readTarget(stdout, ref);
+    } catch (error) {
+      return {
+        error: `could not look ${ref} up: ${error instanceof Error ? error.message : error}`,
+      };
+    }
+  }
+  if ('error' in target) return target;
+  if (!(await branchOnRemote(cfg, target.branch))) {
+    return { error: `origin has no branch ${target.branch} to work on` };
+  }
+  return target;
 }
 
 /** What `gh pr view --json state,reviews,commits` gives back, as far as we care. */

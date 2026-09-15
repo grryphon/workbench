@@ -5,6 +5,121 @@ import { create, harness, ok, standing, waitFor } from './harness.ts';
 import { openStore } from '../store/store.ts';
 import { deriveTicket } from '../domain/ticket.ts';
 import type { Refreshed } from '../domain/events.ts';
+import { RemoteMoved } from './describe.ts';
+
+/** A ticket written on somebody else's branch, committed to. */
+function onTheirBranch(store: ReturnType<typeof openStore>, id = 't1'): void {
+  store.append(id, {
+    type: 'ticket_created',
+    title: `ticket ${id}`,
+    body: 'fix it',
+    on: 'their-feature',
+  });
+  store.append(id, { type: 'queued' });
+}
+
+test('a ticket on somebody else’s branch pushes back to it and is done, with no pull request', async () => {
+  const h = harness({ push: () => ({ commit: 'feed1', url: 'https://example/pr/77' }) });
+  try {
+    onTheirBranch(h.store);
+    await h.orch.idle();
+    h.store.append('t1', { type: 'plan_approved' });
+    await h.orch.idle();
+
+    assert.deepEqual(h.ran, ['plan', 'implement', 'review', 'verify'], 'every stage first');
+    assert.deepEqual(h.pushes, ['t1 -> their-feature']);
+    assert.deepEqual(h.prsOpened, [], 'no pull request of its own');
+    assert.ok(
+      h.refreshed.every((r) => r.on === 'their-feature'),
+      'kept current with their branch, not the base',
+    );
+
+    const t = h.store.ticket('t1');
+    assert.equal(t.status, 'done');
+    assert.equal(t.prUrl, null);
+    assert.deepEqual(t.pushed, {
+      branch: 'their-feature',
+      commit: 'feed1',
+      url: 'https://example/pr/77',
+      landed: null,
+    });
+  } finally {
+    await h.close();
+  }
+});
+
+test('a branch that moved on is taken in and pushed again, once', async () => {
+  const h = harness({
+    push: (_id, attempt) => {
+      if (attempt === 1) throw new RemoteMoved('their-feature');
+      return { commit: 'feed2' };
+    },
+  });
+  try {
+    onTheirBranch(h.store);
+    await h.orch.idle();
+    h.store.append('t1', { type: 'plan_approved' });
+    await h.orch.idle();
+
+    assert.equal(h.store.ticket('t1').status, 'done');
+    assert.equal(h.store.ticket('t1').pushed?.commit, 'feed2');
+    const last = h.refreshed.at(-1);
+    assert.deepEqual(last, { id: 't1', alsoMerge: [], keepConflict: false, on: 'their-feature' });
+  } finally {
+    await h.close();
+  }
+});
+
+test('once the pull request a push went to is merged, a squash is noticed and said', async () => {
+  let decided: 'pending' | 'merged' | 'squashed' = 'pending';
+  const h = harness({
+    push: (id) => ({ commit: `feed${id}cafe0`, url: `https://example/pr/${id}` }),
+    landed: (id) => (id === 't1' ? decided : 'merged'),
+  });
+  try {
+    onTheirBranch(h.store, 't1');
+    onTheirBranch(h.store, 't2');
+    await h.orch.idle();
+    h.store.append('t1', { type: 'plan_approved' });
+    h.store.append('t2', { type: 'plan_approved' });
+    await h.orch.idle();
+
+    assert.equal(h.store.ticket('t1').pushed?.landed, null, 'nobody has decided yet');
+    assert.equal(h.store.ticket('t2').pushed?.landed, 'merged');
+    assert.equal(h.announced.length, 0, 'a merge as itself says nothing');
+
+    decided = 'squashed';
+    await h.orch.idle();
+
+    assert.equal(h.store.ticket('t1').pushed?.landed, 'squashed');
+    assert.equal(h.announced.length, 1);
+    assert.match(h.announced[0] ?? '', /t1[\s\S]*their-feature was squashed[\s\S]*feedt1ca/);
+  } finally {
+    await h.close();
+  }
+});
+
+test('a branch that moves on again blocks the ticket rather than being forced', async () => {
+  const h = harness({
+    push: () => {
+      throw new RemoteMoved('their-feature');
+    },
+  });
+  try {
+    onTheirBranch(h.store);
+    await h.orch.idle();
+    h.store.append('t1', { type: 'plan_approved' });
+    await h.orch.idle();
+
+    const t = h.store.ticket('t1');
+    assert.equal(t.status, 'blocked');
+    assert.match(t.question?.question ?? '', /their-feature has moved on[\s\S]*never forces/);
+    assert.equal(t.pushed, null);
+    assert.equal(h.pushes.length, 0, 'nothing landed');
+  } finally {
+    await h.close();
+  }
+});
 
 test('a pull request that will not open parks the ticket with the reason', async () => {
   const h = harness({

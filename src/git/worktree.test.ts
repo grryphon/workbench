@@ -11,12 +11,14 @@ import {
   commitAll,
   create,
   diff,
+  push,
   refresh,
   remove,
   removedFromBase,
   unresolved,
   type GitConfig,
 } from './worktree.ts';
+import { RemoteMoved } from '../orchestrator/describe.ts';
 
 const run = promisify(execFile);
 
@@ -212,6 +214,116 @@ test('a ticket branches from the remote, not from a stale local base', async () 
     assert.equal(local.stdout.trim(), 'first', "and the manager's own main was left alone");
   } finally {
     await cleanUp(cfg);
+  }
+});
+
+/**
+ * A remote with a branch on it that somebody else owns, and a clone of theirs to move
+ * it — or main — from, the way their pushes would.
+ */
+async function theirBranch(cfg: GitConfig) {
+  const remote = path.join(path.dirname(cfg.repoRoot), 'remote.git');
+  await run('git', ['init', '--bare', '-b', 'main', remote]);
+  await run('git', ['remote', 'add', 'origin', remote], { cwd: cfg.repoRoot });
+  await run('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: cfg.repoRoot });
+
+  const elsewhere = path.join(path.dirname(cfg.repoRoot), 'elsewhere');
+  await run('git', ['clone', '-q', remote, elsewhere]);
+  const theirs = (...args: string[]) => run('git', args, { cwd: elsewhere });
+  await theirs('config', 'user.email', 'other@example.com');
+  await theirs('config', 'user.name', 'Other');
+
+  /** Commits a file to `branch` over there and pushes it, cutting the branch from main if new. */
+  const push = async (branch: string, file: string) => {
+    await theirs('fetch', '-q', 'origin');
+    const known = await theirs('ls-remote', '--heads', 'origin', branch);
+    await theirs(
+      'checkout',
+      '-q',
+      '-B',
+      branch,
+      known.stdout.trim() ? `origin/${branch}` : 'origin/main',
+    );
+    await fs.writeFile(path.join(elsewhere, file), `${file} from them\n`);
+    await theirs('add', '-A');
+    await theirs('commit', '-q', '-m', `${file} on ${branch}`);
+    await theirs('push', '-q', 'origin', branch);
+    return (await theirs('rev-parse', 'HEAD')).stdout.trim();
+  };
+  const remoteHead = async (branch: string) =>
+    (await run('git', ['rev-parse', branch], { cwd: remote })).stdout.trim();
+
+  return { push, remoteHead };
+}
+
+test('a ticket on somebody else’s branch is cut from it and kept current with it', async () => {
+  const cfg = await scratchRepo();
+  try {
+    const them = await theirBranch(cfg);
+    const tip = await them.push('their-feature', 'theirs.txt');
+
+    const wt = await create(cfg, 't1', undefined, 'their-feature');
+    assert.equal(wt.base, tip, 'measured from their branch as the remote has it');
+    assert.equal(await present(path.join(wt.path, 'theirs.txt')), true);
+
+    // Both move. Only their branch is what this ticket stands on.
+    await them.push('their-feature', 'more.txt');
+    await them.push('main', 'main-only.txt');
+
+    const result = await refresh(cfg, 't1', [], false, 'their-feature');
+    assert.equal(result.kind, 'merged');
+    assert.equal(await present(path.join(wt.path, 'more.txt')), true, 'their new work came in');
+    assert.equal(await present(path.join(wt.path, 'main-only.txt')), false, 'and main did not');
+  } finally {
+    await cleanUp(cfg);
+  }
+});
+
+test('work on somebody else’s branch goes back to it as a fast-forward, or not at all', async () => {
+  const cfg = await scratchRepo();
+  try {
+    const them = await theirBranch(cfg);
+    await them.push('their-feature', 'theirs.txt');
+    const wt = await create(cfg, 't1', undefined, 'their-feature');
+
+    await fs.writeFile(path.join(wt.path, 'fix.txt'), 'the fix\n');
+    const mine = await commitAll(wt, 'the fix');
+    assert.equal(await push(cfg, 't1', 'their-feature'), mine);
+    assert.equal(await them.remoteHead('their-feature'), mine, 'their branch has it');
+
+    // They push again before the next one goes.
+    const theirs = await them.push('their-feature', 'theirs-again.txt');
+    await fs.writeFile(path.join(wt.path, 'fix.txt'), 'the fix, again\n');
+    await commitAll(wt, 'more of the fix');
+    await assert.rejects(() => push(cfg, 't1', 'their-feature'), RemoteMoved);
+    assert.equal(
+      await them.remoteHead('their-feature'),
+      theirs,
+      'nothing of theirs was overwritten',
+    );
+
+    // Taken in, it goes.
+    assert.equal((await refresh(cfg, 't1', [], false, 'their-feature')).kind, 'merged');
+    const merged = await push(cfg, 't1', 'their-feature');
+    assert.equal(await them.remoteHead('their-feature'), merged);
+  } finally {
+    await cleanUp(cfg);
+  }
+});
+
+test('nothing the workbench runs can force a push', async () => {
+  // Read off the source rather than trusted to review: the one force in here is
+  // `worktree remove`, which deletes a directory and pushes nothing.
+  for (const file of ['./worktree.ts', '../github/pr.ts']) {
+    const source = await fs.readFile(new URL(file, import.meta.url), 'utf8');
+    const lines = source.split('\n');
+    for (const line of lines.filter((l) => /'(--force[\w-]*|-f)'/.test(l))) {
+      assert.match(line, /'remove'/, `${file} forces something: ${line.trim()}`);
+    }
+    // And no refspec that starts with a `+`, which forces without saying so.
+    for (const line of lines.filter((l) => /'push'/.test(l))) {
+      assert.doesNotMatch(line, /['`]\+/, `${file} forces a push: ${line.trim()}`);
+    }
   }
 });
 

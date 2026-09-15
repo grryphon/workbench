@@ -8,10 +8,46 @@ import {
   mergeArgs,
   mergeCommitsRefusal,
   mergeSubject,
+  readTarget,
   readVerdict,
   retryableMergeFailure,
   reusablePr,
+  withNote,
 } from './pr.ts';
+
+test('the note against squashing goes on a pull request once, after what it already says', () => {
+  const noted = withNote('Their description.\n');
+  assert.match(
+    noted,
+    /^Their description\.\n\n[\s\S]*merge this pull request rather than squashing/,
+  );
+  assert.equal(withNote(noted), noted, 'pushed to again, it is not said twice');
+  assert.equal(withNote(withNote('')), withNote(''), 'nor on a pull request that said nothing');
+});
+
+test('a pull request names the branch to work on, unless it is a fork or no longer open', () => {
+  const pr = (fields: object) => JSON.stringify(fields);
+  assert.deepEqual(
+    readTarget(pr({ headRefName: 'their-feature', isCrossRepository: false, state: 'OPEN' }), '#1'),
+    { branch: 'their-feature' },
+  );
+  assert.match(
+    (
+      readTarget(pr({ headRefName: 'x', isCrossRepository: true, state: 'OPEN' }), '#2') as {
+        error: string;
+      }
+    ).error,
+    /#2 is from a fork/,
+  );
+  assert.match(
+    (
+      readTarget(pr({ headRefName: 'x', isCrossRepository: false, state: 'MERGED' }), '#3') as {
+        error: string;
+      }
+    ).error,
+    /#3 is merged; name its branch/,
+  );
+});
 
 test('a merged pull request is an acceptance', () => {
   assert.deepEqual(readVerdict({ state: 'MERGED' }), { kind: 'accepted' });

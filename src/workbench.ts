@@ -16,7 +16,7 @@ import { createFakeRunner } from './run/fakeRunner.ts';
 import { createFakeChatRunner } from './run/fakeChatRunner.ts';
 import { createCheckRunner } from './run/checks.ts';
 import { diff, gitWorkspace, worktreeFor } from './git/worktree.ts';
-import { githubHost } from './github/pr.ts';
+import { githubHost, resolveOn } from './github/pr.ts';
 import { createApi } from './api/server.ts';
 
 /**
@@ -67,7 +67,7 @@ export async function startWorkbench(
       store,
       announce,
       workspace: gitWorkspace(config),
-      host: githubHost(config),
+      host: githubHost(config, announce),
       checks: createCheckRunner(config.checks),
       runStage: fake
         ? createFakeRunner({ agents, protectedPaths: config.protectedPaths })
@@ -123,6 +123,7 @@ export async function startWorkbench(
   // trying the workbench out must not be the one thing that quietly costs money.
   const api = createApi(store, config, {
     orchestrator,
+    resolveOn: (ref) => resolveOn(config, ref),
     chat: chats === undefined ? createFakeChatRunner() : chats.chat,
     ...(chats === undefined ? {} : { warmChat: chats.warm }),
     ...(pool === undefined

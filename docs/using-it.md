@@ -270,3 +270,35 @@ earlier ticket starts from main like any other.
 Every objection the earlier ticket drew is passed on, not only the last. One that survived
 being answered twice is rejected for the same thing three times, and that it recurred is
 the most useful thing about it.
+
+## Working on somebody else's branch
+
+Sometimes the work you need is on a branch the workbench did not make — a colleague's pull
+request that yours has to build on, and that needs fixing first. Write the ticket on that
+branch, or on the pull request:
+
+```bash
+wb new --on their-feature "Fix the retry loop" "It never gives up."
+wb new --on '#123' "Fix the retry loop"
+wb new --on https://github.com/you/project/pull/123 "Fix the retry loop"
+```
+
+On the board it is the **On branch** box when you write the ticket. A pull request is looked
+up to find its branch. The ticket is refused when it is written if the branch is on a fork,
+the pull request is no longer open, or origin has no such branch.
+
+The ticket is cut from `origin/<branch>`, its diff is measured against that branch, and it
+takes that branch in, not main, whenever it is brought up to date. Plan, review and verify
+all happen as usual. Then, instead of opening a pull request of its own, it pushes to the
+branch. The push is always a fast-forward and never forced. If the branch has moved, the
+ticket takes it in and pushes once more, and if that still fails it stops and asks you.
+Once the push lands the ticket is done, and a pull request open on that branch shows the
+new commits.
+
+The first push to a pull request adds a note to its description asking for it to be merged
+rather than squashed. After it is merged, the workbench checks that the commit it pushed is
+in the base's history. If the pull request was squashed, the ticket's panel and `wb serve`
+say so, because anything built on those commits will now conflict with the base.
+
+`--on` and `--from` cannot be used together: a ticket starts on another ticket's work or on
+a branch, not both.

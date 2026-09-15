@@ -87,23 +87,29 @@ async function main(argv: string[]): Promise<number> {
       const { rest, takeFlag, takeValue } = options(args);
       const noGate = takeFlag('--no-approval');
       const from = takeValue('--from');
+      const on = takeValue('--on');
       const after = takeValue('--after');
       const [title, body = ''] = rest;
 
       const unknown = rest.find((arg) => arg.startsWith('--'));
       if (unknown !== undefined) return fail(`unknown option ${unknown}`);
       if (args.includes('--from') && from === undefined) return fail('carry on from which ticket?');
+      if (args.includes('--on') && on === undefined) return fail('work on which branch?');
       if (args.includes('--after') && after === undefined)
         return fail('start after which tickets?');
       if (!title) return fail('a ticket needs a title');
 
       const ticket = await wb.create(title, body, {
         from,
+        on,
         ...(noGate ? { requiresApproval: false } : {}),
         ...(after === undefined ? {} : { waitsFor: after.split(',').map((o) => o.trim()) }),
       });
       console.log(`${ticket.id}  ${ticket.title}`);
       if (from !== undefined) console.log(`starting from ${from}'s work, on ${ticket.branch}`);
+      if (ticket.on !== null) {
+        console.log(`working on ${ticket.on}, and pushing the result back to it`);
+      }
       if (noGate) console.log('it will build its own plan without stopping to be approved');
       if (ticket.waitsFor.length > 0) {
         console.log(
