@@ -330,6 +330,44 @@ test('a ticket on somebody else’s branch is cut from it and kept current with 
   }
 });
 
+test('a branch it does not own is taken from the remote or not at all', async () => {
+  const cfg = await scratchRepo();
+  try {
+    const them = await theirBranch(cfg);
+    await them.push('their-feature', 'theirs.txt');
+    const wt = await create(cfg, 't1', undefined, 'their-feature');
+    const cut = (await run('git', ['rev-parse', 'HEAD'], { cwd: wt.path })).stdout.trim();
+
+    // A local branch of the same name, carrying a commit nobody else has, and a remote
+    // that cannot be reached to say so.
+    const here = (...args: string[]) => run('git', args, { cwd: cfg.repoRoot });
+    await fs.writeFile(path.join(cfg.repoRoot, 'local-only.txt'), 'never pushed\n');
+    await here('add', '-A');
+    await here('commit', '-q', '-m', 'local only');
+    const local = (await here('rev-parse', 'HEAD')).stdout.trim();
+    await here('update-ref', 'refs/heads/their-feature', local);
+    await here('remote', 'set-url', 'origin', path.join(path.dirname(cfg.repoRoot), 'gone.git'));
+
+    await assert.rejects(() => refresh(cfg, 't1', [], false, 'their-feature'));
+    assert.equal(
+      await present(path.join(wt.path, 'local-only.txt')),
+      false,
+      'nothing unpushed came in',
+    );
+    assert.equal(
+      (await run('git', ['rev-parse', 'HEAD'], { cwd: wt.path })).stdout.trim(),
+      cut,
+      'and the branch is where it was',
+    );
+    await assert.rejects(() => create(cfg, 't2', undefined, 'their-feature'), 'nor at cut time');
+
+    // The base keeps its fallback: a repository with no reachable remote still works.
+    assert.ok(await refresh(cfg, 't1'));
+  } finally {
+    await cleanUp(cfg);
+  }
+});
+
 test('work on somebody else’s branch goes back to it as a fast-forward, or not at all', async () => {
   const cfg = await scratchRepo();
   try {

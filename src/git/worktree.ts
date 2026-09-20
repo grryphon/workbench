@@ -217,7 +217,11 @@ export async function create(
  *
  * `branch` is the base for a ticket on somebody else's branch — `Ticket.on` — which is
  * cut from, refreshed against and measured from that branch exactly as any other
- * ticket is from the base.
+ * ticket is from the base. The fallback is for the base alone: a branch the workbench
+ * does not own is taken as the remote has it or not at all, because what is taken in is
+ * what gets pushed back, and a local branch of that name carries whatever unpushed
+ * commits happen to be on it here. So a failed fetch throws, and the ticket blocks with
+ * the git error like any other clash.
  */
 async function startPoint(cfg: GitConfig, branch = cfg.base): Promise<string> {
   try {
@@ -225,7 +229,8 @@ async function startPoint(cfg: GitConfig, branch = cfg.base): Promise<string> {
     const remote = `origin/${branch}`;
     await git(cfg.repoRoot, 'rev-parse', '--verify', '--quiet', `${remote}^{commit}`);
     return remote;
-  } catch {
+  } catch (error) {
+    if (branch !== cfg.base) throw error;
     return branch;
   }
 }
