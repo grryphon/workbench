@@ -276,6 +276,30 @@ test('a failing check does not merge, and brings back the failing job’s log', 
   );
 });
 
+test('a job that printed more than `gh` would hold still explains itself', async () => {
+  // An ordinary verbose suite overruns the buffer before it dies. What it printed is
+  // on the error all the same, and it is the only thing implement can work from: the
+  // link alone is a URL it cannot fetch, charged as a revision.
+  const gh = fakeGh([
+    refused(JSON.stringify([{ name: 'ci', bucket: 'fail', state: 'FAILURE', link: JOB_LINK }])),
+    () => {
+      throw Object.assign(new Error('stdout maxBuffer length exceeded'), {
+        code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+        stdout: 'AssertionError: 2 != 3\n',
+        stderr: '',
+      });
+    },
+  ]);
+
+  const outcome = await awaitChecks('https://example/pr/1', '/tmp/wt', {
+    timeoutMs: 20 * 60_000,
+    ...gh,
+  });
+
+  const results = outcome.kind === 'checks_failed' ? outcome.results : [];
+  assert.match(results[0]?.output ?? '', /AssertionError: 2 != 3/);
+});
+
 test('a check that never concludes gives up, naming what is still running', async () => {
   const gh = fakeGh([
     refused(

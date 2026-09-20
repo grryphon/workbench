@@ -271,11 +271,22 @@ const FAILED_BUCKETS = ['fail', 'cancel'];
 const CHECKS_POLL_MS = 30_000;
 const CHECKS_GRACE_MS = 10_000;
 
+/**
+ * Long enough for `gh` to fetch a whole job's log, short enough that a hung one
+ * cannot wedge a ticket — and the wait sits inside the merge gate, so a `gh` that
+ * never returns is every ticket's merge, not just this one's. The poll loop only
+ * notices the timeout between polls, so this is what actually bounds a single call.
+ */
+const GH_TIMEOUT_MS = 2 * 60_000;
+
+/** An Actions log is not a 1 MiB thing, and a verbose suite is not one on failure. */
+const GH_MAX_BUFFER = 8 * 1024 * 1024;
+
 /** What running `gh` comes to. Injected so the wait can be tested without a network. */
 type Exec = (
   file: string,
   args: string[],
-  opts: { cwd: string },
+  opts: { cwd: string; timeout: number; maxBuffer: number },
 ) => Promise<{ stdout: string; stderr: string }>;
 
 /** What awaiting the checks came to. Passing is the only one that merges. */
@@ -319,7 +330,7 @@ async function askChecks(prUrl: string, cwd: string, exec: Exec): Promise<Check[
     const { stdout } = await exec(
       'gh',
       ['pr', 'checks', prUrl, '--json', 'name,state,bucket,link,description'],
-      { cwd },
+      { cwd, timeout: GH_TIMEOUT_MS, maxBuffer: GH_MAX_BUFFER },
     );
     return readChecks(stdout);
   } catch (error) {
@@ -348,13 +359,20 @@ async function failedJobLog(check: Check, cwd: string, exec: Exec): Promise<stri
     const { stdout, stderr } = await exec(
       'gh',
       ['run', 'view', job.run, '--job', job.job, '--log-failed'],
-      { cwd },
+      { cwd, timeout: GH_TIMEOUT_MS, maxBuffer: GH_MAX_BUFFER },
     );
     return keepTail(stdout, stderr) || said;
-  } catch {
+  } catch (error) {
     // The log is the best explanation, not the only one. Being unable to fetch it
-    // must not turn a failed check into a failed merge.
-    return said || 'the check failed, and its log could not be read';
+    // must not turn a failed check into a failed merge — but what did arrive before
+    // it went wrong is still the explanation, and the tail is all that was wanted
+    // anyway. Throwing it away would send implement a URL it cannot fetch.
+    const failure = error as { stdout?: unknown; stderr?: unknown };
+    const printed = keepTail(
+      typeof failure.stdout === 'string' ? failure.stdout : '',
+      typeof failure.stderr === 'string' ? failure.stderr : '',
+    );
+    return printed || said || 'the check failed, and its log could not be read';
   }
 }
 
@@ -453,7 +471,7 @@ export async function mergePr(
       await run('gh', mergeArgs(prUrl, subject), { cwd: wt.path });
       return { kind: 'merged', results: checks.results };
     } catch (error) {
-      if (await merged(prUrl, wt.path)) return { kind: 'merged' };
+      if (await merged(prUrl, wt.path)) return { kind: 'merged', results: checks.results };
       const message = error instanceof Error ? error.message : String(error);
       if (attempt === MERGE_ATTEMPTS || !retryableMergeFailure(message)) throw error;
       await new Promise((resolve) => setTimeout(resolve, mergeBackoffMs(attempt)));
