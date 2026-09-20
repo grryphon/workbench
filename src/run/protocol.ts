@@ -180,7 +180,7 @@ export function readApproval(stage: Stage, text: string): { rejected?: string; c
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = bare(lines[i] ?? '');
 
-    if (/^APPROVED$/i.test(line)) return {};
+    if (APPROVAL.test(line)) return {};
 
     const rejection = /^REJECTED:\s*(.+)$/i.exec(line);
     if (rejection?.[1]) return { rejected: rejection[1].trim() };
@@ -199,9 +199,8 @@ export function readApproval(stage: Stage, text: string): { rejected?: string; c
 
 /**
  * A marker line with the markdown an agent naturally writes it in taken off, so
- * `## APPROVED` and `**APPROVED**` are the vote they plainly are. The line must
- * still be nothing but the marker: this loosens how a verdict may be dressed, not
- * where one may hide.
+ * `## APPROVED` and `**APPROVED**` are the vote they plainly are. What may follow
+ * the marker is each verdict reader's own business; this only strips the dressing.
  */
 function bare(line: string): string {
   return line
@@ -218,6 +217,18 @@ function bare(line: string): string {
  * `LATER:` suggestions into the objections the implementer was told to fix.
  */
 const NEXT_BLOCK = /^(LATER|STEPS|COMPLETION CRITERIA|SCALE|CHANGES):|^(APPROVED|REJECTED:)/i;
+
+/**
+ * An approval: the word opening a `bare()` line, then either the end of it or
+ * something that closes the word off — punctuation, or the markup `bare()` could
+ * not strip because the line carries on past it (`**APPROVED.** The change …`).
+ *
+ * The closer is what separates a verdict from a hedge. `APPROVED with reservations`
+ * is not a vote and must stay so; `APPROVED.` plainly is. in2lambda's t3 opened its
+ * report with the bold-and-a-sentence form, was read as having voted for nothing,
+ * and had a whole second plan written over finished work.
+ */
+const APPROVAL = /^APPROVED(?=$|[.!:*`])/i;
 
 /** The objections under a `CHANGES:` heading, in the reviewer's own words. */
 function readChanges(lines: string[], start: number): string | undefined {

@@ -103,8 +103,34 @@ test('an unreadable verdict is treated as a rejection, not as approval', () => {
 });
 
 test('a mention inside a sentence is not a vote', () => {
-  const text = 'The plan said APPROVED would be the marker.\nStill investigating.';
-  assert.ok(readApproval('review', text).rejected);
+  for (const text of [
+    'The plan said APPROVED would be the marker.\nStill investigating.',
+    'not APPROVED yet',
+    // A comma is how a hedge starts, so it does not close the word off.
+    'APPROVED, with reservations',
+  ]) {
+    assert.ok(readApproval('review', text).rejected, `"${text}" must not read as approval`);
+  }
+});
+
+test('a verdict with a full stop or an explanation after it is still a verdict', () => {
+  // What t3 on the in2lambda board did: verify ran the suite, broke the code three
+  // ways to prove the tests caught it, opened its report with the line below — and
+  // was read as having voted for nothing. A whole plan was written in its place.
+  const t3 =
+    '**APPROVED.** The change does what the ticket asks, and the new tests fail when the parts they test are taken out.';
+
+  for (const text of [
+    t3,
+    'APPROVED.',
+    '**APPROVED.**',
+    '## APPROVED.',
+    '**APPROVED** The change does what the ticket asks.',
+    'APPROVED: the evidence holds',
+  ]) {
+    assert.deepEqual(readApproval('review', text), {}, `"${text}" is an approval`);
+    assert.deepEqual(readApproval('verify', text), {}, `"${text}" is an approval`);
+  }
 });
 
 test('a verdict is still a verdict with something after it', () => {
@@ -242,6 +268,14 @@ test('an explicit verdict is the last word, whatever came before it', () => {
     rejected: 'wrong problem',
   });
   assert.deepEqual(readApproval('review', 'CHANGES:\n- a\n\nAPPROVED'), {});
+
+  // And an approval with its explanation after it does not shield what follows.
+  assert.deepEqual(readApproval('verify', '**APPROVED.** ok\n\nCHANGES:\n- the units are wrong'), {
+    changes: '- the units are wrong',
+  });
+  assert.deepEqual(readApproval('verify', '**APPROVED.**\n\nREJECTED: the model is inverted'), {
+    rejected: 'the model is inverted',
+  });
 });
 
 test('an empty changes block is not a verdict', () => {
