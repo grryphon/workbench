@@ -1,4 +1,10 @@
-import { createOrchestrator, type RunResult, type StageRunner, type Verdict } from './loop.ts';
+import {
+  createOrchestrator,
+  type MergeOutcome,
+  type RunResult,
+  type StageRunner,
+  type Verdict,
+} from './loop.ts';
 import { openStore, type Store } from '../store/store.ts';
 import type { CheckRun, Event, Refreshed, Stage } from '../domain/events.ts';
 import type { Credentials } from '../run/credentials.ts';
@@ -56,7 +62,8 @@ export function harness(
     /** The manager's answer. A function when it differs by ticket. */
     verdict?: Verdict | ((ticketId: string) => Verdict);
     openPr?: () => Promise<string>;
-    merge?: (ticketId: string) => Promise<void>;
+    /** What the host's merge came to. Merged, and nothing waited for, by default. */
+    merge?: (ticketId: string) => Promise<void | MergeOutcome>;
     /**
      * What tidying up does. Somewhere to watch an acceptance from: it is the first
      * thing that follows one, whether the merge was asked for here or found on the
@@ -153,8 +160,9 @@ export function harness(
         return typeof configured === 'function' ? configured(t.id) : configured;
       },
       merge: async (t) => {
-        await opts.merge?.(t.id);
-        prsMerged.push(t.prUrl ?? '');
+        const outcome = (await opts.merge?.(t.id)) ?? { kind: 'merged' as const };
+        if (outcome.kind === 'merged') prsMerged.push(t.prUrl ?? '');
+        return outcome;
       },
     },
     runStage: async (args) => {

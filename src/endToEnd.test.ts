@@ -82,7 +82,7 @@ async function rig(checks: string[] = []): Promise<Rig> {
         return url;
       },
       verdict: async () => ({ kind: 'pending' }),
-      merge: async () => {},
+      merge: async () => ({ kind: 'merged' }),
     },
     runStage: (args) => {
       resumed.push(args.resume);

@@ -33,7 +33,7 @@ export function createCheckRunner(checks: readonly string[]) {
           timeout: TIMEOUT_MS,
           maxBuffer: 8 * 1024 * 1024,
         });
-        results.push({ command, ok: true, output: tail(stdout, stderr) });
+        results.push({ command, ok: true, output: keepTail(stdout, stderr) });
       } catch (error) {
         results.push({ command, ok: false, output: describe(error) });
       }
@@ -50,7 +50,7 @@ export function createCheckRunner(checks: readonly string[]) {
  */
 function describe(error: unknown): string {
   const failure = error as { stdout?: unknown; stderr?: unknown; message?: unknown };
-  const said = tail(
+  const said = keepTail(
     typeof failure.stdout === 'string' ? failure.stdout : '',
     typeof failure.stderr === 'string' ? failure.stderr : '',
   );
@@ -62,8 +62,13 @@ function describe(error: unknown): string {
   return typeof failure.message === 'string' ? failure.message : 'it failed';
 }
 
-/** The end of the output: a failure explains itself at the bottom, not the top. */
-function tail(stdout: string, stderr: string): string {
+/**
+ * The end of the output: a failure explains itself at the bottom, not the top.
+ *
+ * Exported because a check the code host ran is trimmed the same way: it becomes the
+ * same change list, and a whole Actions log in the database is the same waste.
+ */
+export function keepTail(stdout: string, stderr: string): string {
   const both = [stdout.trim(), stderr.trim()].filter((s) => s !== '').join('\n');
   return both.length <= KEEP_CHARS ? both : `…\n${both.slice(-KEEP_CHARS)}`;
 }

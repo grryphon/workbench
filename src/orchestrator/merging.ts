@@ -520,6 +520,12 @@ export function createMerging({
    * the host: the ticket leaves `awaiting_verdict` at once, so a second tick
    * cannot arrive and merge what has already been merged.
    *
+   * The host's own checks on the pushed head are waited for in there, so a merge can
+   * come back having merged nothing: a check that failed is work, and goes back to
+   * implement carrying the log the way a failing standing check does — the reducer
+   * routes it, and nothing is tidied up, because the ticket is not accepted. One
+   * still running when the wait ran out is a question, and parks.
+   *
    * All of it behind the merge gate, the pass over the other branches included: see
    * `runMerge` for what two of those at once does.
    */
@@ -531,7 +537,34 @@ export function createMerging({
       // is no re-entry and so nothing that could settle twice.
       if (!(await refresh(ticket, worktree, 'merge'))) return;
 
-      await deps.host.merge(ticket);
+      const startedAt = deps.now?.() ?? Date.now();
+      const outcome = await deps.host.merge(ticket);
+      const waitedMs = (deps.now?.() ?? Date.now()) - startedAt;
+
+      if (outcome.kind === 'checks_failed') {
+        store.append(ticket.id, { type: 'pr_checks_run', results: outcome.results, waitedMs });
+        return;
+      }
+
+      if (outcome.kind === 'checks_pending') {
+        store.append(ticket.id, {
+          type: 'blocked',
+          reason:
+            `waited ${Math.round(waitedMs / 60_000)} minute(s) for the pull request’s ` +
+            `checks and they have not finished. Still running:\n` +
+            outcome.pending.map((name) => `  ${name}`).join('\n') +
+            '\n\nNothing was merged. Accept it again once they are done, or merge it ' +
+            'on the code host yourself.',
+        });
+        return;
+      }
+
+      // They passed, and the wait for them is still the ticket's news: minutes pass
+      // between the Accept and the merge, and nothing else would say where they went.
+      // Nothing is recorded where there were no checks to wait for.
+      if (outcome.results && outcome.results.length > 0) {
+        store.append(ticket.id, { type: 'pr_checks_run', results: outcome.results, waitedMs });
+      }
       store.append(ticket.id, { type: 'verdict', verdict: 'accepted' });
       await accepted(ticket);
     });

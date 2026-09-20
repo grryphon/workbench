@@ -61,6 +61,12 @@ export type Config = {
   pluginRoot: string;
   /** How often to ask the code host whether a pull request has a verdict. */
   pollMs: number;
+  /**
+   * How long to wait for the checks the code host runs on a pull request before
+   * giving up on them and parking the ticket. The merge waits for them: a repository
+   * whose real test is its CI cannot use it as a gate otherwise.
+   */
+  checksTimeoutMinutes: number;
   /** The port `wb serve` listens on, and every other command talks to. */
   port: number;
   /**
@@ -106,6 +112,7 @@ const DEFAULTS = {
   checks: [] as string[],
   about: 'claude.md',
   pollMs: 30_000,
+  checksTimeoutMinutes: 20,
   port: 4600,
   runner: 'claude' as const,
 };

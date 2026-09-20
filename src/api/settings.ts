@@ -39,6 +39,7 @@ const CONFIG_DEFAULTS: Record<string, string | number | string[]> = {
   worktreeRoot: '.worktrees',
   protectedPaths: [],
   pollMs: 30_000,
+  checksTimeoutMinutes: 20,
   port: 4600,
   runner: 'claude',
   colour: '',
@@ -131,6 +132,15 @@ const CONFIGURED: Record<
     type: 'number',
     group: 'Work',
     about: 'How often to ask the code host whether a pull request has been merged or refused.',
+  },
+  checksTimeoutMinutes: {
+    label: 'Checks timeout (min)',
+    type: 'number',
+    group: 'Work',
+    about:
+      'How long an accepted pull request waits for the checks the code host runs on it ' +
+      'before the ticket is parked. A failing one sends the ticket back to implement ' +
+      'with the failing job’s log; a pull request with no checks merges at once.',
   },
   port: {
     label: 'Port',

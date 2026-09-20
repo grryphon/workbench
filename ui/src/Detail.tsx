@@ -1114,6 +1114,11 @@ function detail(e: Event): string {
       return `${e.tool}${e.allowed ? '' : ' — REFUSED'}`;
     case 'checks_run':
       return `${e.results.length} check(s), ${e.results.filter((r) => !r.ok).length} failed`;
+    case 'pr_checks_run':
+      return (
+        `${e.results.length} check(s) on the pull request, ` +
+        `${e.results.filter((r) => !r.ok).length} failed`
+      );
     case 'question_asked':
       return e.question;
     case 'question_answered':

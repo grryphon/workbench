@@ -203,6 +203,16 @@ export type EventBody =
    * implement run, and again after a clash on an offered branch has been settled.
    */
   | { type: 'checks_run'; runId: string; results: CheckRun[] }
+  /**
+   * The checks the code host ran on the pushed head, waited for before the merge:
+   * `command` is the check's name, and a failed one carries its job's log. The wait
+   * itself is worth recording — minutes pass between the Accept and the merge, and
+   * without this the ticket says nothing about where they went.
+   *
+   * A failure sends the ticket back to implement carrying the log, and counts as a
+   * revision: it is the same news as a standing check failing, arriving later.
+   */
+  | { type: 'pr_checks_run'; results: CheckRun[]; waitedMs: number }
   | { type: 'question_asked'; runId: string; question: string; reasoning: string }
   | { type: 'question_answered'; answer: string }
   | {

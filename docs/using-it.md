@@ -238,6 +238,15 @@ seconds, so accepting five things in a row costs at most one resolution each rat
 for every other branch after every landing. Only one merge happens at a time, and a ticket
 whose turn has not come says on its card and in its panel which merge it is behind.
 
+Then it waits for the checks your code host runs on the pull request. A failing one is
+treated exactly as a failing standing check is: nothing is merged, the failing job's log
+becomes the change list, and the ticket goes back to implement — which costs a revision, and
+a third failure in a row is read as being about the plan. One still running after **Checks
+timeout (min)** (20 by default) **blocks** the ticket naming what has not finished, so you
+can accept it again or merge it yourself. A pull request with no checks on it merges at
+once. This is the only way to gate on a test that can only run in CI — one needing secrets a
+worktree does not have — because the workbench's own standing checks run on your machine.
+
 A pull request you have already answered is left alone. Pushing a merge to it would be a
 commit made for reasons nothing to do with your objection, and a branch that has moved past
 a change request reads as one that has addressed it.

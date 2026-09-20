@@ -56,6 +56,7 @@ test('everything a project owns resolves against its home, not against the code'
   assert.equal(config.worktreeRoot, path.join(home, '.worktrees'));
   assert.equal(config.pluginRoot, home, 'skills are the project’s, not the workbench’s');
   assert.equal(config.base, 'trunk', 'the file wins over the default');
+  assert.equal(config.checksTimeoutMinutes, 20, 'and a default stands where the file is silent');
 
   // Worked out rather than configured: a workbench an agent could write to is one
   // that can rewrite its own instructions mid-ticket.

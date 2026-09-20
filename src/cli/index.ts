@@ -822,10 +822,11 @@ function describe(e: { type: string } & Record<string, unknown>): string {
   if (e.type === 'tool_requested') {
     return `  ${String(e['tool'])}${e['allowed'] === false ? ' — REFUSED' : ''}`;
   }
-  if (e.type === 'checks_run') {
+  if (e.type === 'checks_run' || e.type === 'pr_checks_run') {
     const results = Array.isArray(e['results']) ? (e['results'] as { ok?: unknown }[]) : [];
     const failed = results.filter((r) => r.ok === false).length;
-    return `  ${results.length} check(s), ${failed === 0 ? 'all passed' : `${failed} FAILED`}`;
+    const whose = e.type === 'pr_checks_run' ? ' on the pull request' : '';
+    return `  ${results.length} check(s)${whose}, ${failed === 0 ? 'all passed' : `${failed} FAILED`}`;
   }
   if (e.type === 'question_asked') return `  ${String(e['question'])}`;
   if (e.type === 'blocked') return `  ${String(e['reason'])}`;

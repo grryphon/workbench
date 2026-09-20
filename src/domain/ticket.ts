@@ -701,6 +701,31 @@ export function applyEvent(t: Ticket, e: Event): Ticket {
     case 'merge_queued':
       return { ...t, queuedBehind: e.behind };
 
+    // The host's own checks on the head that was about to land. Passing is news and
+    // nothing else; failing is the same news a standing check failing is, and goes
+    // the same way — back to implement with the log to work from, counted as a
+    // revision, and capped like every other round of changes.
+    //
+    // The offer ends with it, and everything the offer was waiting on: the merge the
+    // manager asked for did not happen, and the reworked branch is offered again onto
+    // the same pull request, which is why `prUrl` stays.
+    case 'pr_checks_run': {
+      const failed = e.results.filter((r) => !r.ok);
+      if (failed.length === 0) return t;
+      return sentBack(
+        {
+          ...t,
+          running: false,
+          settling: false,
+          queuedBehind: null,
+          offered: false,
+          mergeRequested: false,
+          ...movedOn,
+        },
+        failed.map((f) => `\`${f.command}\` failed:\n${f.output}`).join('\n\n'),
+      );
+    }
+
     // A rejection ends the offer as well as the round: the reworked ticket is
     // offered again, on the same branch and so on the same pull request — which is
     // why `prUrl` stays. It is `offered` that ends, so the ticket can be shipped
@@ -795,20 +820,7 @@ function afterStage(t: Ticket, e: Extract<Event, { type: 'stage_finished' }>): T
   // carrying what to put right. Only so many times — an objection that survives
   // being addressed twice is evidence about the approach, not the execution, and
   // that is a matter for a new plan.
-  if (e.changes !== undefined) {
-    return t.revisions + 1 > MAX_REVISIONS
-      ? {
-          ...stopped,
-          status: 'planning',
-          rejection: `after ${t.revisions} attempts to address it: ${e.changes}`,
-        }
-      : {
-          ...stopped,
-          status: 'implementing',
-          changes: e.changes,
-          revisions: t.revisions + 1,
-        };
-  }
+  if (e.changes !== undefined) return sentBack(stopped, e.changes);
 
   const stage = t.stage;
   if (stage === null) return stopped;
@@ -828,6 +840,25 @@ function afterStage(t: Ticket, e: Extract<Event, { type: 'stage_finished' }>): T
 
   const next = NEXT_STAGE[stage];
   return next ? { ...stopped, status: STATUS_FOR_STAGE[next] } : stopped;
+}
+
+/**
+ * Work sent back to be put right, carrying what to put right in it. Shared because
+ * two things say it: a review or verify objection, and a check the code host failed
+ * on the head that was about to merge — which is the same news arriving later, and
+ * must cost the same and be capped the same.
+ *
+ * Only so many times: an objection that survives being addressed twice is evidence
+ * about the approach, not the execution, and that is a matter for a new plan.
+ */
+function sentBack(t: Ticket, changes: string): Ticket {
+  return t.revisions + 1 > MAX_REVISIONS
+    ? {
+        ...t,
+        status: 'planning',
+        rejection: `after ${t.revisions} attempts to address it: ${changes}`,
+      }
+    : { ...t, status: 'implementing', changes, revisions: t.revisions + 1 };
 }
 
 /**

@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import type { CodeHost, Verdict } from '../orchestrator/loop.ts';
+import type { CheckRun } from '../domain/events.ts';
+import type { CodeHost, MergeOutcome, Verdict } from '../orchestrator/loop.ts';
+import { keepTail } from '../run/checks.ts';
 import { worktreeFor, type GitConfig, type Worktree } from '../git/worktree.ts';
 
 const run = promisify(execFile);
@@ -10,7 +12,7 @@ const run = promisify(execFile);
  * GitHub as the orchestrator's code host. The only place that knows a ticket is
  * offered as a pull request, and the only place that writes what one says.
  */
-export function githubHost(cfg: GitConfig): CodeHost {
+export function githubHost(cfg: GitConfig & { checksTimeoutMinutes: number }): CodeHost {
   return {
     openPr: (ticket) =>
       openPr(worktreeFor(cfg, ticket.id), {
@@ -28,6 +30,7 @@ export function githubHost(cfg: GitConfig): CodeHost {
         worktreeFor(cfg, ticket.id),
         ticket.prUrl,
         mergeSubject(ticket.title, ticket.id),
+        cfg.checksTimeoutMinutes * 60_000,
       );
     },
   };
@@ -258,12 +261,173 @@ export function alreadyMerged(stdout: string): boolean {
 const MERGE_ATTEMPTS = 4;
 const mergeBackoffMs = (attempt: number) => 3_000 * 2 ** (attempt - 1);
 
+/** One check the host ran on the pull request, as `gh pr checks --json` gives it. */
+export type Check = { name: string; bucket: string; link?: string; description?: string };
+
+/** Buckets that are a check saying no. `skipping` is not one: it never ran. */
+const FAILED_BUCKETS = ['fail', 'cancel'];
+
+/** How often the checks are asked about, and how long a first empty answer is doubted. */
+const CHECKS_POLL_MS = 30_000;
+const CHECKS_GRACE_MS = 10_000;
+
+/** What running `gh` comes to. Injected so the wait can be tested without a network. */
+type Exec = (
+  file: string,
+  args: string[],
+  opts: { cwd: string },
+) => Promise<{ stdout: string; stderr: string }>;
+
+/** What awaiting the checks came to. Passing is the only one that merges. */
+type ChecksOutcome =
+  { kind: 'passed'; results: CheckRun[] } | Exclude<MergeOutcome, { kind: 'merged' }>;
+
 /**
- * Pushes the branch and merges the pull request.
+ * The checks on a pull request, out of what `gh pr checks --json` printed. Its own
+ * function, like `mergeArgs`, so the reading can be tested without a network.
+ *
+ * Nothing printed is no checks: `gh` says so on stderr rather than in the JSON.
+ */
+export function readChecks(stdout: string): Check[] {
+  const said = stdout.trim();
+  if (said === '') return [];
+  const parsed = JSON.parse(said) as Check[];
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+/**
+ * The Actions run and job a check's link points at, or null when it points at
+ * something else — a check can be any status a service posted, and only a job of a
+ * workflow run has a log to fetch.
+ */
+export function jobOf(link: string | undefined): { run: string; job: string } | null {
+  const found = /\/actions\/runs\/(\d+)\/job\/(\d+)/.exec(link ?? '');
+  return found ? { run: found[1] as string, job: found[2] as string } : null;
+}
+
+/**
+ * Asks the host what its checks say.
+ *
+ * `gh pr checks` exits non-zero while anything is pending or failing and prints the
+ * JSON anyway, so the answer is taken off the error as readily as off the success —
+ * the exit code here is a summary, not a failure. A pull request with no checks is
+ * an error with nothing to read, and that is not a failure either: it is the answer
+ * for every repository that has no CI.
+ */
+async function askChecks(prUrl: string, cwd: string, exec: Exec): Promise<Check[]> {
+  try {
+    const { stdout } = await exec(
+      'gh',
+      ['pr', 'checks', prUrl, '--json', 'name,state,bucket,link,description'],
+      { cwd },
+    );
+    return readChecks(stdout);
+  } catch (error) {
+    const failure = error as { stdout?: unknown; stderr?: unknown; message?: unknown };
+    const printed = typeof failure.stdout === 'string' ? failure.stdout.trim() : '';
+    if (printed.startsWith('[')) return readChecks(printed);
+    const said = [failure.stderr, failure.message].map((s) => String(s ?? '')).join('\n');
+    if (said.includes('no checks reported')) return [];
+    throw error;
+  }
+}
+
+/**
+ * What the failing job printed, trimmed exactly as a failing local check's output
+ * is: it becomes the same change list, and the whole of an Actions log is the same
+ * waste of the database and of the run that reads it.
+ *
+ * A check that is not an Actions job has no log to fetch — an external service
+ * posted a status — so what it said about itself is the next best thing.
+ */
+async function failedJobLog(check: Check, cwd: string, exec: Exec): Promise<string> {
+  const job = jobOf(check.link);
+  const said = [check.description, check.link].filter((s) => s).join('\n');
+  if (job === null) return said || 'the check failed, and said nothing about why';
+  try {
+    const { stdout, stderr } = await exec(
+      'gh',
+      ['run', 'view', job.run, '--job', job.job, '--log-failed'],
+      { cwd },
+    );
+    return keepTail(stdout, stderr) || said;
+  } catch {
+    // The log is the best explanation, not the only one. Being unable to fetch it
+    // must not turn a failed check into a failed merge.
+    return said || 'the check failed, and its log could not be read';
+  }
+}
+
+/**
+ * Waits for the checks the host runs on the pushed head, and says what they came to.
+ *
+ * The point of the wait: a repository whose real test only runs in CI — with secrets
+ * a worktree does not have — has no way to gate on it otherwise, and branch
+ * protection turns that into `gh pr merge` being refused for "required status",
+ * which is a settled refusal and parks the ticket for a person to nudge.
+ *
+ * `exec`, `sleep` and `now` are injected so a test can fake `gh` and never wait.
+ */
+export async function awaitChecks(
+  prUrl: string,
+  cwd: string,
+  opts: {
+    timeoutMs: number;
+    exec?: Exec;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+  },
+): Promise<ChecksOutcome> {
+  const exec = opts.exec ?? (run as Exec);
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
+  const now = opts.now ?? Date.now;
+  const started = now();
+
+  for (let poll = 0; ; poll++) {
+    let checks = await askChecks(prUrl, cwd, exec);
+
+    // A workflow is not queued the instant the push lands, and a pull request read
+    // in that gap looks exactly like one with no CI at all. So nothing is doubted
+    // but nothing: asked once more a moment later, which is the difference between
+    // waiting for the checks and merging just before they start.
+    if (checks.length === 0 && poll === 0) {
+      await sleep(CHECKS_GRACE_MS);
+      checks = await askChecks(prUrl, cwd, exec);
+    }
+
+    const pending = checks.filter((c) => c.bucket === 'pending');
+    if (pending.length === 0) {
+      // Every check either way, not only the failures: what was waited for is the
+      // ticket's news whichever way it went, and a failed one carries its log.
+      const results: CheckRun[] = [];
+      for (const check of checks) {
+        const ok = !FAILED_BUCKETS.includes(check.bucket);
+        results.push({
+          command: check.name,
+          ok,
+          output: ok ? (check.description ?? '') : await failedJobLog(check, cwd, exec),
+        });
+      }
+      return results.every((r) => r.ok)
+        ? { kind: 'passed', results }
+        : { kind: 'checks_failed', results };
+    }
+
+    if (now() - started >= opts.timeoutMs) {
+      return { kind: 'checks_pending', pending: pending.map((c) => c.name) };
+    }
+    await sleep(CHECKS_POLL_MS);
+  }
+}
+
+/**
+ * Pushes the branch, waits for the host's checks on it, and merges the pull request.
  *
  * The push first because the branch may have gained a commit the pull request has
  * never seen: bringing the base in happens here, immediately before this, and
- * merging without it would merge the code as GitHub last saw it.
+ * merging without it would merge the code as GitHub last saw it. The checks after
+ * it, for the same reason: they are the checks on what is about to land, not on
+ * whatever the head was before the push.
  *
  * Asked more than once, because `gh pr merge` asks whether the branch can be merged
  * once and never again: a base that moved a moment ago is answered no, the ticket
@@ -271,17 +435,25 @@ const mergeBackoffMs = (attempt: number) => 3_000 * 2 ** (attempt - 1);
  * first ask and after every refusal, so a merge that has already landed is finished
  * rather than asked for a second time.
  */
-export async function mergePr(wt: Worktree, prUrl: string, subject: string): Promise<void> {
-  if (await merged(prUrl, wt.path)) return;
+export async function mergePr(
+  wt: Worktree,
+  prUrl: string,
+  subject: string,
+  checksTimeoutMs: number,
+): Promise<MergeOutcome> {
+  if (await merged(prUrl, wt.path)) return { kind: 'merged' };
 
   await run('git', ['push', 'origin', wt.branch], { cwd: wt.path });
+
+  const checks = await awaitChecks(prUrl, wt.path, { timeoutMs: checksTimeoutMs });
+  if (checks.kind !== 'passed') return checks;
 
   for (let attempt = 1; ; attempt++) {
     try {
       await run('gh', mergeArgs(prUrl, subject), { cwd: wt.path });
-      return;
+      return { kind: 'merged', results: checks.results };
     } catch (error) {
-      if (await merged(prUrl, wt.path)) return;
+      if (await merged(prUrl, wt.path)) return { kind: 'merged' };
       const message = error instanceof Error ? error.message : String(error);
       if (attempt === MERGE_ATTEMPTS || !retryableMergeFailure(message)) throw error;
       await new Promise((resolve) => setTimeout(resolve, mergeBackoffMs(attempt)));

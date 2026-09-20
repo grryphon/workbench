@@ -1383,3 +1383,79 @@ test('work the new base breaks is not offered either', async () => {
     await h.close();
   }
 });
+
+test('a check the code host failed sends the work back instead of merging it', async () => {
+  // The repository whose real test can only run in Actions, with secrets a worktree
+  // does not have: the only way it gates on that test is the merge waiting for it.
+  const h = harness({
+    merge: async () => ({
+      kind: 'checks_failed',
+      results: [
+        { command: 'lint', ok: true, output: '' },
+        { command: 'integration', ok: false, output: 'AssertionError: 2 != 3' },
+      ],
+    }),
+  });
+  try {
+    standing(h.store, 't1');
+    h.store.append('t1', { type: 'merge_requested' });
+    await h.orch.idle();
+
+    // Where the failure put it, read at the moment it was recorded: the loop carries
+    // straight on from there, and by the time it is idle the rework has been built,
+    // reviewed, verified and offered again on the same pull request.
+    const events = h.store.eventsFor('t1');
+    const at = events.findIndex((e) => e.type === 'pr_checks_run');
+    assert.notEqual(at, -1, 'the wait is in the ticket’s history');
+    const sent = deriveTicket(events.slice(0, at + 1));
+
+    assert.equal(sent.status, 'implementing', 'back to the stage that can put it right');
+    assert.match(sent.changes ?? '', /`integration` failed:\nAssertionError: 2 != 3/);
+    assert.equal(sent.revisions, 1, 'and it costs a revision, like any other round of changes');
+
+    assert.deepEqual(h.ran, ['implement', 'review', 'verify'], 'the work was made again');
+    assert.deepEqual(h.prsMerged, [], 'nothing was merged');
+    assert.deepEqual(h.tidied, [], 'and nothing was tidied up, because nothing was accepted');
+  } finally {
+    await h.close();
+  }
+});
+
+test('checks that never finish park the ticket naming what is still running', async () => {
+  const h = harness({
+    merge: async () => ({ kind: 'checks_pending', pending: ['integration', 'docs'] }),
+  });
+  try {
+    standing(h.store, 't1');
+    h.store.append('t1', { type: 'merge_requested' });
+    await h.orch.idle();
+
+    const t = h.store.ticket('t1');
+    assert.equal(t.status, 'blocked');
+    assert.match(t.question?.question ?? '', /integration/);
+    assert.match(t.question?.question ?? '', /docs/);
+    assert.deepEqual(h.prsMerged, [], 'and the pull request is left for them to finish');
+  } finally {
+    await h.close();
+  }
+});
+
+test('checks that pass merge the pull request, and say what was waited for', async () => {
+  const h = harness({
+    merge: async () => ({
+      kind: 'merged',
+      results: [{ command: 'integration', ok: true, output: '' }],
+    }),
+  });
+  try {
+    standing(h.store, 't1');
+    h.store.append('t1', { type: 'merge_requested' });
+    await h.orch.idle();
+
+    assert.equal(h.store.ticket('t1').status, 'done');
+    assert.deepEqual(h.prsMerged, ['https://example/pr/t1']);
+    assert.equal(h.store.eventsFor('t1').filter((e) => e.type === 'pr_checks_run').length, 1);
+  } finally {
+    await h.close();
+  }
+});

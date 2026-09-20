@@ -1040,6 +1040,75 @@ test('the manager asking for changes is not rationed the way an agent is', () =>
   }
 });
 
+/** A ticket built, offered, and accepted — which is where the host's checks are read. */
+function offered(j: Journal): Ticket {
+  runStage(j, 'plan');
+  j.add({ type: 'plan_approved' });
+  runStage(j, 'implement');
+  runStage(j, 'review');
+  runStage(j, 'verify');
+  j.add({ type: 'pr_opened', url: 'https://example/pr/9' });
+  return j.add({ type: 'merge_requested' });
+}
+
+test('checks the code host passed are news and nothing else', () => {
+  const j = newTicket();
+  offered(j);
+  const passed = j.add({
+    type: 'pr_checks_run',
+    results: [{ command: 'ci', ok: true, output: '' }],
+    waitedMs: 90_000,
+  });
+
+  assert.equal(passed.status, 'awaiting_verdict', 'it is still on its way to being merged');
+  assert.equal(passed.mergeRequested, true, 'and the merge the manager asked for still stands');
+  assert.equal(passed.revisions, 0);
+});
+
+test('a check the code host failed sends the work back with the log to work from', () => {
+  const j = newTicket();
+  offered(j);
+  const sent = j.add({
+    type: 'pr_checks_run',
+    results: [
+      { command: 'lint', ok: true, output: '' },
+      { command: 'ci', ok: false, output: 'AssertionError: 2 != 3' },
+    ],
+    waitedMs: 120_000,
+  });
+
+  assert.equal(sent.status, 'implementing');
+  assert.match(sent.changes ?? '', /`ci` failed:\nAssertionError: 2 != 3/);
+  assert.doesNotMatch(sent.changes ?? '', /lint/, 'only what failed is something to put right');
+  assert.equal(sent.revisions, 1, 'it costs the same as any other round of changes');
+
+  // The offer is over, and so is everything it was waiting on. The rework is pushed
+  // to the pull request it already has, which is why `prUrl` stays.
+  assert.equal(sent.offered, false);
+  assert.equal(sent.mergeRequested, false);
+  assert.equal(sent.prUrl, 'https://example/pr/9');
+});
+
+test('a check that fails once too often is evidence about the plan, not the code', () => {
+  const j = newTicket();
+  offered(j);
+  const failing: EventBody = {
+    type: 'pr_checks_run',
+    results: [{ command: 'ci', ok: false, output: 'still red' }],
+    waitedMs: 1,
+  };
+
+  // Capped like every other round: MAX_REVISIONS is 2, so the third goes to planning.
+  assert.equal(j.add(failing).revisions, 1);
+  j.add({ type: 'pr_opened', url: 'https://example/pr/9' });
+  assert.equal(j.add(failing).revisions, 2);
+  j.add({ type: 'pr_opened', url: 'https://example/pr/9' });
+
+  const replanned = j.add(failing);
+  assert.equal(replanned.status, 'planning');
+  assert.match(replanned.rejection ?? '', /after 2 attempts to address it/);
+});
+
 test('a stage that fails during a rework restarts as a stage, not as a wait', () => {
   // The ticket still has its pull request, so a restart that read `prUrl` would
   // drop it back into a verdict it is no longer waiting for.

@@ -5,13 +5,55 @@ import os from 'node:os';
 import {
   allowsMergeCommits,
   alreadyMerged,
+  awaitChecks,
+  jobOf,
   mergeArgs,
   mergeCommitsRefusal,
   mergeSubject,
+  readChecks,
   readVerdict,
   retryableMergeFailure,
   reusablePr,
 } from './pr.ts';
+
+const JOB_LINK = 'https://github.com/o/r/actions/runs/123/job/456';
+
+/**
+ * `gh` faked, one answer per call, with the calls recorded. A clock that jumps by
+ * whatever was slept for, so a wait that takes twenty minutes takes none here.
+ */
+function fakeGh(answers: (() => { stdout: string; stderr: string })[]) {
+  const calls: string[][] = [];
+  let clock = 0;
+  let answer = 0;
+  return {
+    calls,
+    now: () => clock,
+    sleep: async (ms: number) => {
+      clock += ms;
+    },
+    exec: async (_file: string, args: string[]) => {
+      calls.push(args);
+      // `gh run view` is asked for a log, not for the checks: it takes the answer
+      // it was scripted with, wherever in the sequence it falls.
+      const next = answers[Math.min(answer, answers.length - 1)] as () => {
+        stdout: string;
+        stderr: string;
+      };
+      if (args[0] !== 'run') answer++;
+      return next();
+    },
+  };
+}
+
+const said = (stdout: string) => () => ({ stdout, stderr: '' });
+
+const checksJson = (checks: Record<string, unknown>[]) => said(JSON.stringify(checks));
+
+/** What `gh pr checks` does when something is pending or failing: prints, then exits 8. */
+const refused = (stdout: string) => () => {
+  throw Object.assign(new Error('Command failed: gh pr checks'), { stdout, stderr: '' });
+};
 
 test('a merged pull request is an acceptance', () => {
   assert.deepEqual(readVerdict({ state: 'MERGED' }), { kind: 'accepted' });
@@ -165,6 +207,113 @@ test('a pull request that has already merged is not merged again', () => {
   assert.equal(alreadyMerged(JSON.stringify({ state: 'MERGED' })), true);
   assert.equal(alreadyMerged(JSON.stringify({ state: 'OPEN' })), false);
   assert.equal(alreadyMerged('{}'), false, 'and nothing read is nothing merged');
+});
+
+test('the checks are read out of what `gh pr checks --json` printed', () => {
+  assert.deepEqual(readChecks(JSON.stringify([{ name: 'test', bucket: 'pass' }])), [
+    { name: 'test', bucket: 'pass' },
+  ]);
+  assert.deepEqual(readChecks('[]'), [], 'and an empty list is no checks');
+  assert.deepEqual(readChecks('  '), [], 'as is nothing printed at all');
+});
+
+test('a check links to the job whose log explains it, when it is one', () => {
+  assert.deepEqual(jobOf(JOB_LINK), { run: '123', job: '456' });
+  // Any service can post a status, and most of them are not Actions jobs.
+  assert.equal(jobOf('https://ci.example/build/7'), null);
+  assert.equal(jobOf(undefined), null);
+});
+
+test('the merge waits for a check that is still running, and merges once it passes', async () => {
+  const gh = fakeGh([
+    refused(JSON.stringify([{ name: 'ci', bucket: 'pending', state: 'IN_PROGRESS' }])),
+    checksJson([{ name: 'ci', bucket: 'pass', state: 'SUCCESS' }]),
+  ]);
+
+  const outcome = await awaitChecks('https://example/pr/1', '/tmp/wt', {
+    timeoutMs: 20 * 60_000,
+    ...gh,
+  });
+
+  assert.deepEqual(outcome, {
+    kind: 'passed',
+    results: [{ command: 'ci', ok: true, output: '' }],
+  });
+  assert.equal(gh.calls.length, 2, 'it asked again rather than reading the first answer as final');
+});
+
+test('a failing check does not merge, and brings back the failing job’s log', async () => {
+  const gh = fakeGh([
+    refused(
+      JSON.stringify([
+        { name: 'lint', bucket: 'pass', state: 'SUCCESS', description: 'ok' },
+        { name: 'ci', bucket: 'fail', state: 'FAILURE', link: JOB_LINK, description: 'failing' },
+      ]),
+    ),
+    said('FAIL test/units.py::test_headline\nAssertionError: 2 != 3\n'),
+  ]);
+
+  const outcome = await awaitChecks('https://example/pr/1', '/tmp/wt', {
+    timeoutMs: 20 * 60_000,
+    ...gh,
+  });
+
+  assert.equal(outcome.kind, 'checks_failed');
+  const results = outcome.kind === 'checks_failed' ? outcome.results : [];
+  assert.deepEqual(
+    results.map((r) => [r.command, r.ok]),
+    [
+      ['lint', true],
+      ['ci', false],
+    ],
+    'every check is recorded, not only the failure',
+  );
+  assert.match(results[1]?.output ?? '', /AssertionError: 2 != 3/);
+  assert.deepEqual(
+    gh.calls[1],
+    ['run', 'view', '123', '--job', '456', '--log-failed'],
+    'the log came from the job the check linked to',
+  );
+});
+
+test('a check that never concludes gives up, naming what is still running', async () => {
+  const gh = fakeGh([
+    refused(
+      JSON.stringify([
+        { name: 'ci', bucket: 'pending', state: 'QUEUED' },
+        { name: 'lint', bucket: 'pass', state: 'SUCCESS' },
+      ]),
+    ),
+  ]);
+
+  const outcome = await awaitChecks('https://example/pr/1', '/tmp/wt', {
+    timeoutMs: 60_000,
+    ...gh,
+  });
+
+  assert.deepEqual(outcome, { kind: 'checks_pending', pending: ['ci'] });
+  assert.equal(gh.now(), 60_000, 'it waited the whole timeout, and not a poll longer');
+});
+
+test('a pull request with no checks on it merges without waiting for any', async () => {
+  const noChecks = () => {
+    throw Object.assign(new Error('no checks reported on the ‘wb/t1’ branch'), {
+      stdout: '',
+      stderr: '',
+    });
+  };
+  const gh = fakeGh([noChecks, noChecks]);
+
+  const outcome = await awaitChecks('https://example/pr/1', '/tmp/wt', {
+    timeoutMs: 20 * 60_000,
+    ...gh,
+  });
+
+  assert.deepEqual(outcome, { kind: 'passed', results: [] });
+  // Asked twice and no more: a workflow is not queued the instant the push lands,
+  // and everything after that grace is a repository that simply has no CI.
+  assert.equal(gh.calls.length, 2);
+  assert.equal(gh.now(), 10_000);
 });
 
 test('an approving review alone does not accept — only merging does', () => {

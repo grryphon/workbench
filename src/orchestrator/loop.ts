@@ -178,12 +178,26 @@ export type Workspace = {
   discard: (ticketId: string) => Promise<void>;
 };
 
+/**
+ * What asking the host to merge came to. Merging waits for the checks the host runs
+ * on the pushed head, so the two ways it can end without merging are answers rather
+ * than failures: a check that failed is work to do, and one still running when the
+ * wait ran out is a question for the manager.
+ */
+export type MergeOutcome =
+  /** `results` is what the host's checks said, when there were any to wait for. */
+  | { kind: 'merged'; results?: CheckRun[] }
+  /** Every check on the pull request; the failed ones carry their job's log. */
+  | { kind: 'checks_failed'; results: CheckRun[] }
+  /** The names of the checks that had still not concluded. */
+  | { kind: 'checks_pending'; pending: string[] };
+
 /** Where finished work is offered, and where the manager's answer comes back from. */
 export type CodeHost = {
   openPr: (ticket: Ticket) => Promise<string>;
   verdict: (ticket: Ticket) => Promise<Verdict>;
   /** Merges the offer, because the manager said so here rather than on the host. */
-  merge: (ticket: Ticket) => Promise<void>;
+  merge: (ticket: Ticket) => Promise<MergeOutcome>;
 };
 
 export type Deps = {
