@@ -1109,6 +1109,23 @@ test('a check that fails once too often is evidence about the plan, not the code
   assert.match(replanned.rejection ?? '', /after 2 attempts to address it/);
 });
 
+test('a check that fails after the ticket was cancelled leaves it cancelled', () => {
+  // The wait is minutes long, so this is where a cancellation lands: reopening the
+  // ticket would rebuild it and offer a second pull request for work nobody wants.
+  const j = newTicket();
+  offered(j);
+  j.add({ type: 'cancelled', reason: 'not wanted after all' });
+
+  const still = j.add({
+    type: 'pr_checks_run',
+    results: [{ command: 'ci', ok: false, output: 'AssertionError: 2 != 3' }],
+    waitedMs: 120_000,
+  });
+
+  assert.equal(still.status, 'cancelled');
+  assert.equal(still.revisions, 0, 'and nothing is charged for work that will not happen');
+});
+
 test('a stage that fails during a rework restarts as a stage, not as a wait', () => {
   // The ticket still has its pull request, so a restart that read `prUrl` would
   // drop it back into a verdict it is no longer waiting for.

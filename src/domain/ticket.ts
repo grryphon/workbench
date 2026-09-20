@@ -710,6 +710,11 @@ export function applyEvent(t: Ticket, e: Event): Ticket {
     // manager asked for did not happen, and the reworked branch is offered again onto
     // the same pull request, which is why `prUrl` stays.
     case 'pr_checks_run': {
+      // An ended ticket stays ended, as it does for `blocked`. The wait is minutes
+      // long, and a cancellation lands in the middle of it far more readily than
+      // anywhere else: a failing check that reopened one would put it back to
+      // implement, rebuild it, and offer a second pull request for work nobody wants.
+      if (ended(t)) return t;
       const failed = e.results.filter((r) => !r.ok);
       if (failed.length === 0) return t;
       return sentBack(
