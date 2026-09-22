@@ -1112,7 +1112,7 @@ test('stopping refuses every write and leaves every read alone', async () => {
   await withApi(async (wb, store) => {
     await wb.create('a thing', '');
 
-    assert.deepEqual(await wb.stopped(), { stopped: false, running: [] });
+    assert.deepEqual(await wb.stopped(), { stopped: false, running: [], paused: null });
     assert.deepEqual(await wb.stop(), { stopped: true, running: [], interrupted: [] });
     assert.equal(store.stopped(), true, 'and it is written down, so a restart still has it');
 
@@ -1134,6 +1134,26 @@ test('stopping refuses every write and leaves every read alone', async () => {
   });
 });
 
+test('the board is told why agent work is paused, not just the terminal', async () => {
+  const held = { why: 'the Claude CLI is not logged in', fix: 'run: claude setup-token' };
+
+  await withApi(
+    async (wb) => {
+      assert.deepEqual((await wb.stopped()).paused, { ...held, resumes: true });
+    },
+    {
+      orchestrator: {
+        interrupt: () => [],
+        tick: async () => {},
+        paused: () => ({ ...held, resumes: true }),
+      },
+    },
+  );
+
+  // No orchestrator at all — the CLI's own client talking to a bare server.
+  await withApi(async (wb) => assert.equal((await wb.stopped()).paused, null));
+});
+
 test('stopping again interrupts the runs that were left to finish', async () => {
   const interrupted: string[] = ['t1'];
   const ticked: number[] = [];
@@ -1145,6 +1165,7 @@ test('stopping again interrupts the runs that were left to finish', async () => 
 
       const first = await wb.stop();
       assert.deepEqual(first, { stopped: true, running: ['t1'], interrupted: [] });
+      assert.equal((await wb.stopped()).paused, null, 'nothing is paused, so nothing to say');
 
       // The second press, which is the impatient one. The loop is what stops the
       // runs; this route only says so, and reports what it stopped.
@@ -1158,6 +1179,7 @@ test('stopping again interrupts the runs that were left to finish', async () => 
       orchestrator: {
         interrupt: () => interrupted,
         tick: async () => ticked.push(1),
+        paused: () => undefined,
       },
     },
   );

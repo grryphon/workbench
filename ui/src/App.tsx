@@ -123,8 +123,13 @@ export function App() {
   // How Done is read: sorted, and cut down to a subset. The browser's choice, not
   // the workbench's.
   const [doneView, chooseDone] = useDoneView();
-  // Whether the whole board is stopped, and what is still running in spite of it.
-  const [stopped, setStopped] = useState<{ stopped: boolean; running: string[] } | null>(null);
+  // Whether the whole board is stopped, and what is still running in spite of it —
+  // and why no agent work can start, when the answer is a missing credential.
+  const [stopped, setStopped] = useState<{
+    stopped: boolean;
+    running: string[];
+    paused: { why: string; fix: string; resumes: boolean } | null;
+  } | null>(null);
 
   /** Anything appended redraws the board. No polling, and no refresh button. */
   useEffect(() => {
@@ -344,6 +349,17 @@ export function App() {
       </header>
 
       {error !== null && <div className="error">{error}</div>}
+
+      {/* Standing state rather than a question, so a banner and not a modal: nothing
+          starts, but writing, approving and cancelling all still work. */}
+      {stopped?.paused && (
+        <div className="paused">
+          Agent work is paused: {stopped.paused.why}.<pre>{stopped.paused.fix}</pre>
+          {stopped.paused.resumes
+            ? 'Work starts on its own once this is sorted.'
+            : 'Restart the workbench with a working credential.'}
+        </div>
+      )}
 
       {tab === 'Agents' && (
         <Docs

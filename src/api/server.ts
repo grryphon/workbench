@@ -60,7 +60,7 @@ export type ApiDeps = {
    * wait for the next poll. Absent in a test that only drives the routes, and then
    * stopping is still a stop — it just has nothing in flight to interrupt.
    */
-  orchestrator?: Pick<Orchestrator, 'tick' | 'interrupt'>;
+  orchestrator?: Pick<Orchestrator, 'tick' | 'interrupt' | 'paused'>;
 };
 
 /**
@@ -152,7 +152,16 @@ async function handle(
         .filter((t) => t.running)
         .map((t) => t.id);
 
-    if (method === 'GET') return send(res, 200, { stopped: store.stopped(), running: running() });
+    // The state of the whole board rather than of a ticket, which is what agent work
+    // being paused for want of a credential is — so it is answered here, where the
+    // board already asks on every event. The presses below leave it out: pressing
+    // stop changes nothing about it.
+    if (method === 'GET')
+      return send(res, 200, {
+        stopped: store.stopped(),
+        running: running(),
+        paused: deps.orchestrator?.paused() ?? null,
+      });
     if (method === 'POST') {
       // The polite press: nothing new starts, and what is in flight is left to
       // finish. Pressed again while already stopped it is not polite any more —

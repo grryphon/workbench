@@ -220,9 +220,21 @@ export type Deps = {
   now?: () => number;
 };
 
+/**
+ * Why no stage will start, in the same words the CLI is told. `resumes` is whether
+ * the credential could still turn up on its own: a logged-out CLI can log back in
+ * under a running workbench, a refused one has to be replaced and restarted.
+ */
+export type Paused = { why: string; fix: string; resumes: boolean };
+
 export type Orchestrator = {
   /** Do whatever the rules currently permit. Safe to call at any time. */
   tick: () => Promise<unknown>;
+  /**
+   * Why agent work is paused, or undefined while it is not. Process state rather
+   * than anything written down: a restart works it out again.
+   */
+  paused: () => Paused | undefined;
   /** Resolves once nothing is in flight and no further action is permitted. */
   idle: () => Promise<void>;
   /**
@@ -283,6 +295,12 @@ export function createOrchestrator(deps: Deps, opts: { pollMs?: number } = {}): 
   let listening = false;
   /** So the credential state is announced when it changes, not on every tick. */
   let wasOk = true;
+  /**
+   * The current credential answer when it is "no", for anyone who did not see the
+   * announcement — the board, which was not watching the terminal. Unlike `wasOk`
+   * this is set on every check rather than on a change: it is the state, not the news.
+   */
+  let paused: Paused | undefined;
   /** The same, for a session limit: the models last said to be waiting one out. */
   let wasLimited = new Set<string>();
   /**
@@ -321,6 +339,9 @@ export function createOrchestrator(deps: Deps, opts: { pollMs?: number } = {}): 
    */
   async function canRunAgents(): Promise<boolean> {
     const credentials = rejection === undefined ? await deps.credentials() : refused(rejection);
+    paused = credentials.ok
+      ? undefined
+      : { why: credentials.why, fix: credentials.fix, resumes: rejection === undefined };
     if (credentials.ok === wasOk) return credentials.ok;
     wasOk = credentials.ok;
 
@@ -920,6 +941,8 @@ export function createOrchestrator(deps: Deps, opts: { pollMs?: number } = {}): 
 
   return {
     tick,
+
+    paused: () => paused,
 
     interrupt() {
       // Named before they are aborted, so `doStage` finds the name however fast the

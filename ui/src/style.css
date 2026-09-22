@@ -268,6 +268,21 @@ header .stopper.go {
   font-size: 0.85rem;
 }
 
+/* Like .error, but this is not an error: it is the board waiting for a credential,
+   which is what --wait means, and what to type about it is a block of commands
+   rather than a sentence. */
+.paused {
+  background: var(--wait);
+  color: var(--on-fill);
+  padding: 0.5rem 1.2rem;
+  font-size: 0.85rem;
+}
+
+.paused pre {
+  margin: 0.4rem 0;
+  white-space: pre-wrap;
+}
+
 /* Board ------------------------------------------------------------------- */
 
 /* The column is the drop target, so its height is the drop zone. Columns stretch

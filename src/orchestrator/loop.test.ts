@@ -1269,6 +1269,13 @@ test('being logged out pauses the board rather than burning it', async () => {
     assert.equal(h.announced.length, 1, 'said once, not once per ticket per tick');
     assert.match(h.announced[0] ?? '', /paused[\s\S]*setup-token/);
 
+    // The same news for anyone who was not watching the terminal.
+    assert.deepEqual(h.orch.paused(), {
+      why: 'the Claude CLI is not logged in',
+      fix: 'run: claude setup-token',
+      resumes: true,
+    });
+
     // Logging back in needs no restart and nothing cleaned up.
     loggedIn = true;
     await h.orch.idle();
@@ -1277,6 +1284,7 @@ test('being logged out pauses the board rather than burning it', async () => {
     assert.equal(h.store.ticket('t1').status, 'plan_gate');
     assert.equal(h.announced.length, 2);
     assert.match(h.announced[1] ?? '', /carrying on/);
+    assert.equal(h.orch.paused(), undefined, 'and the board stops saying it is paused');
   } finally {
     await h.close();
   }
@@ -1306,6 +1314,7 @@ test('losing credentials mid-flight stops the next stage, not the current ticket
     const t = h.store.ticket('t1');
     assert.equal(t.status, 'implementing', 'it is waiting to implement, not broken');
     assert.equal(t.costUsd, 0.2, 'and it kept the record of what it had already spent');
+    assert.deepEqual(h.orch.paused(), { why: 'expired', fix: 'log in', resumes: true });
   } finally {
     await h.close();
   }
@@ -1350,6 +1359,12 @@ test('a refused credential stops the board, not just the ticket that found out',
     const ranBefore = h.ran.length;
     await h.orch.idle();
     assert.equal(h.ran.length, ranBefore, 'and it stays stopped');
+
+    // And the board is told the same, including that this one will not resume itself.
+    const shown = h.orch.paused();
+    assert.match(shown?.why ?? '', /401/);
+    assert.match(shown?.fix ?? '', /CLAUDE_CODE_OAUTH_TOKEN/);
+    assert.equal(shown?.resumes, false);
   } finally {
     await h.close();
   }

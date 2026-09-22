@@ -28,6 +28,12 @@ stays in the column of the stage it stopped in, marked as needing you. The heade
 everything waiting on you. Each backlog card has a tick box in its corner, and *Commit N*
 above the column moves the ticked ones to **Committed** together, in the order they were in.
 
+**A banner under the header when agent work is paused** because the Claude credential is
+missing, expired or refused. It says which, and what to type to put it right; nothing
+starts until you do, and the rest of the board — writing, approving, cancelling — carries
+on as usual. A logged-out CLI picks itself up once you log in; a credential the service
+refused needs replacing and the workbench restarting.
+
 **Light or dark, at the end of the header.** *Auto* follows the machine and is what you
 get until you say otherwise; *Light* and *Dark* overrule it. The choice is the browser's,
 not the workbench's — it is kept locally rather than in Settings, so the same board read
