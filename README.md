@@ -18,8 +18,7 @@ cannot collide and your own working tree is never touched.
 - A **Claude** credential. `claude setup-token` gives a long-lived one from a
   subscription; `ANTHROPIC_API_KEY` uses a Console key, billed per token. The stages can
   also run on a Chat Completions service instead — Codex, Ollama, LM Studio, llama.cpp,
-  vLLM — by setting `WB_PROVIDER=openai` with `WB_BASE_URL`, `WB_API_KEY` and `WB_MODEL`.
-  `wb auth` reports which service is live.
+  vLLM — see [Other models](docs/other-models.md).
 
 ## Getting started
 
@@ -77,6 +76,7 @@ sends it back, and what you write becomes what the next attempt is briefed with.
 ## Documentation
 
 - [Using it](docs/using-it.md) — the board, the ticket panel, and how work moves
+- [Other models](docs/other-models.md) — Codex, a model on your own machine, and what each one costs you
 - [Reference](docs/reference.md) — commands, configuration, limits, the HTTP API, tools
 - [Design](docs/design.md) — why four stages, and why they are allowed to say what they
   say

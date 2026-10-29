@@ -131,6 +131,20 @@ taken says who is on it and offers the next free one, writing the answer here if
 it. Two workbenches for the *same* repository is refused rather than moved: they would
 open one database between them.
 
+**`provider`** (`claude`) is which model service the stages talk to. `openai` speaks the
+Chat Completions wire, which is what OpenAI — Codex included — and the local servers,
+Ollama, LM Studio, llama.cpp and vLLM, all answer. `anthropic-gateway` keeps the shipped
+CLI and only moves where it points, for a gateway in front of something else that answers
+the Anthropic wire. **`baseUrl`** says where that service is; its own default is used when
+the field is absent. **`models`** maps the model names in `agents/*.md` onto the ones that
+service answers to, and the `WB_MODEL` environment variable overrides the whole map with
+one model for every stage. **`prices`** is `model: [in, out]` USD per million tokens,
+which is what keeps the money ceilings live on a service that reports no cost.
+**`reasoning`** (`off`) sends `reasoning_effort` for
+the services that take it. Each has a `WB_` environment override for trying a service
+without editing a file the board also writes to; [Other models](other-models.md) lists
+them and says what switching costs you.
+
 ## Limits
 
 A ticket cannot run away with your money.
@@ -154,6 +168,12 @@ review.
 **No stage is ever skipped.** A `small` ticket is still implemented, still reviewed
 adversarially and still verified; each is asked for a proportionate look rather than the
 maximum one.
+
+**Money rails need prices.** The dollar limits spend what the service reports a
+completion cost; a service that reports nothing — any local server, and OpenAI's wire
+generally — is charged nothing, so a ceiling cannot bound a number nobody has. Turns,
+cycles and `maxCycles` still apply; only the dollar rails go quiet until `prices` says
+what the model costs.
 
 ## Skills
 
@@ -197,6 +217,10 @@ at all.
 
 `src/code/` is where the parsing lives — Python from Python's own `ast`, JavaScript from
 `ts.createSourceFile`, Markdown from a scan. Nothing is installed to do any of it.
+
+On the Chat Completions provider these same names are answered by executors of the
+workbench's own, behind the same guard and the same allowed lists — plainer than Claude
+Code's, and [Other models](other-models.md) says what else differs.
 
 ## HTTP API
 
@@ -250,7 +274,8 @@ src/workbench.ts  the composition root — how all of the below is wired togethe
 src/domain/       what a ticket is, the rules for what may happen to it, and the columns
 src/store/        the event log, in SQLite
 src/agents/       loading agent definitions, and assembling what an agent is told
-src/run/          the guard, the model-service adapter, and a fake agent for testing
+src/run/          the guard, the model-service engines (Claude, OpenAI-wire, fake), and the
+                  adapter the stages call through
 src/git/          a branch and worktree per ticket
 src/github/       pull requests and verdicts
 src/orchestrator/ the loop that drives tickets through stages
