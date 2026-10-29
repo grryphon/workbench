@@ -218,8 +218,8 @@ export async function verifyEngine(settings: EngineSettings): Promise<Credential
       ? (process.env['WB_MODEL'] as string).trim()
       : (Object.values(settings.models)[0] ?? 'gpt-4o-mini');
 
-  try {
-    const response = await fetch(`${settings.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+  const ask = (capName: string) =>
+    fetch(`${settings.baseUrl.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -228,10 +228,20 @@ export async function verifyEngine(settings: EngineSettings): Promise<Credential
       body: JSON.stringify({
         model,
         messages: [{ role: 'user', content: 'Reply with exactly: ok' }],
-        max_tokens: 64,
+        // A cap keeps the probe cheap on a reasoning model that could otherwise think
+        // a lot to say "ok". `max_tokens` is what the local servers have always taken;
+        // the gpt-5 generation renamed it and refuses the old name with a 400 that
+        // says so, so that answer retries under the new one rather than failing.
+        [capName]: 64,
         stream: false,
       }),
     });
+
+  try {
+    let response = await ask('max_tokens');
+    if (response.status === 400 && (await response.text()).includes('max_tokens')) {
+      response = await ask('max_completion_tokens');
+    }
     if (response.ok) return found;
 
     const said = (await response.text()).slice(0, 300);
