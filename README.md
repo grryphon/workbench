@@ -16,7 +16,10 @@ cannot collide and your own working tree is never touched.
   no database to install.
 - **git**, and **[`gh`](https://cli.github.com)** authenticated, for pull requests.
 - A **Claude** credential. `claude setup-token` gives a long-lived one from a
-  subscription; `ANTHROPIC_API_KEY` uses a Console key, billed per token.
+  subscription; `ANTHROPIC_API_KEY` uses a Console key, billed per token. The stages can
+  also run on a Chat Completions service instead — Codex, Ollama, LM Studio, llama.cpp,
+  vLLM — by setting `WB_PROVIDER=openai` with `WB_BASE_URL`, `WB_API_KEY` and `WB_MODEL`.
+  `wb auth` reports which service is live.
 
 ## Getting started
 
