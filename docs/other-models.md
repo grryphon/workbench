@@ -1,7 +1,7 @@
 # Other models
 
-The workbench ships talking to Claude. It can talk to something else instead: the Codex
-models on OpenAI's API, or a model running on your own machine.
+The stages can run on Claude, on the Codex models behind OpenAI's API, or on a model
+running on your own machine. Which one answers is a setting, not a different product.
 
 Nothing about how work moves changes. The four stages, the plan gate, the guard that
 confines an agent to its ticket's worktree, the pull request at the end — all of it is
