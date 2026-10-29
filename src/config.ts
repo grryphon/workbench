@@ -13,6 +13,20 @@ export const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
 /** The file that says a workbench works here. Its directory is the home. */
 export const CONFIG_FILE = 'workbench.config.json';
 
+/**
+ * Which model service a workbench talks to.
+ *
+ * Said here rather than in `run/engine.ts` so that this file stays free of the agent
+ * SDK — the same reason `agents/load.ts` reads the tool names out of `tools/names.ts`
+ * instead of importing them: a config file should not drag in the thing it configures.
+ *
+ * `claude` is the shipped path. `openai` speaks the Chat Completions wire, which is
+ * what OpenAI (Codex included) and the local servers — Ollama, LM Studio, llama.cpp,
+ * vLLM — all answer. `anthropic-gateway` keeps the shipped CLI and only moves where it
+ * points, for a gateway in front of something else that answers the Anthropic wire.
+ */
+export type Provider = 'claude' | 'openai' | 'anthropic-gateway';
+
 export type Config = {
   /** The repository work happens in. */
   repoRoot: string;
@@ -68,6 +82,37 @@ export type Config = {
    * agent that makes no external calls — for trying the workbench out.
    */
   runner: 'claude' | 'fake';
+  /**
+   * Which model service the stages talk to. Absent is `claude`, exactly as shipped, so
+   * nothing about a project that says nothing here changes.
+   *
+   * The environment wins over these, as it does over `runner`: the person trying a
+   * different model for an afternoon should not have to edit a file the board also
+   * writes to. `WB_PROVIDER` takes `claude`, `openai` or `anthropic-gateway`;
+   * `WB_BASE_URL` and `WB_API_KEY` say where it is and how to reach it (`OPENAI_API_KEY`
+   * is read too, and a server on this machine needs no key at all); `WB_MODELS` maps the
+   * names in `agents/*.md` onto the ones that service answers to, and `WB_MODEL` overrides
+   * them all with one; `WB_PRICES` is `model=in/out` per million tokens, which is what
+   * keeps the money ceilings live on a service that reports no cost; `WB_REASONING` sends
+   * `reasoning_effort`, off by default because several local servers refuse it.
+   */
+  provider?: Provider;
+  /** Where that service is. Empty means the provider's own default. */
+  baseUrl?: string;
+  /**
+   * Claude's model names, as `agents/*.md` still spell them, to the names this service
+   * answers to. Absent is passed through, so a project that has already rewritten its
+   * agent files needs no map here at all.
+   */
+  models?: Record<string, string>;
+  /**
+   * USD per million tokens, `[in, out]`, per model. A service that quotes nothing
+   * reports no cost, and `maxBudgetUsd` cannot bound a number nobody knows — so this
+   * is what keeps the money rails live on a model that does not price itself.
+   */
+  prices?: Record<string, [number, number]>;
+  /** Whether to send `reasoning_effort`. Off by default: several local servers 400 on it. */
+  reasoning?: boolean;
 };
 
 /**

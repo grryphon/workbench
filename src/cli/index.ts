@@ -10,6 +10,7 @@ import { abandoning, draining } from './stopping.ts';
 import { CHILD_ENV, offer, relaunch, taken } from './updating.ts';
 import { reconcile } from '../orchestrator/loop.ts';
 import { checkCredentials, verifyCredentials } from '../run/credentials.ts';
+import { engineSettings, verifyEngine } from '../run/engine.ts';
 import { startWorkbench } from '../workbench.ts';
 import { createClient, type Client } from '../api/client.ts';
 import { UI_DIST } from '../api/server.ts';
@@ -59,7 +60,13 @@ async function main(argv: string[]): Promise<number> {
   // It really uses the credential: "there is one" and "it is accepted" are different
   // answers, and this command is asked precisely when that difference matters.
   if (command === 'auth') {
-    const credentials = await verifyCredentials();
+    // Which model service is asked here rather than of the config the lines below load,
+    // because this command is asked before there is a workbench at all — and because
+    // asking the Claude CLI whether a key for a local server works is asking the wrong
+    // machine. The environment answers it either way.
+    const settings = engineSettings(home === undefined ? {} : loadConfig(home), process.env);
+    const credentials =
+      settings.provider === 'claude' ? await verifyCredentials() : await verifyEngine(settings);
     if (credentials.ok) {
       console.log(`Ready, using ${credentials.how}.`);
       return 0;

@@ -11,7 +11,8 @@ import { createChatRunner } from './run/chat.ts';
 import { createNameChecker } from './run/nameCheck.ts';
 import { createEstimator, estimateAsTicketsMove } from './run/estimate.ts';
 import { createWarmPool } from './run/warmPool.ts';
-import { cachedCredentials } from './run/credentials.ts';
+import { describeEngine, engineFor, engineSettings } from './run/engine.ts';
+import { cachedCredentials, providerCredentials } from './run/credentials.ts';
 import { createFakeRunner } from './run/fakeRunner.ts';
 import { createFakeChatRunner } from './run/fakeChatRunner.ts';
 import { createCheckRunner } from './run/checks.ts';
@@ -62,6 +63,24 @@ export async function startWorkbench(
   const agents = () => loadAgents(config.agentDirs);
   const fake = config.runner === 'fake';
 
+  /**
+   * Which model service the stages talk to, and the engine that talks to it. Built once:
+   * the same engine serves every stage, every conversation about a ticket and every
+   * one-shot question, through the dependency each of those three already took so a test
+   * could answer without a network. A project that says nothing about this gets `claude`
+   * and the SDK, exactly as it did before.
+   */
+  const settings = engineSettings(config, process.env);
+  const engine = engineFor(settings, {
+    protectedPaths: config.protectedPaths,
+    pluginRoot: config.pluginRoot,
+  });
+  // Said once, at the moment it could still be wrong. A board quietly running on a
+  // model nobody chose is the same class of surprise as a board quietly running on an
+  // account nobody chose, and the fix for that is why `wb serve` already says which
+  // credential every stage used.
+  if (settings.provider !== 'claude') announce(`model service: ${describeEngine(settings)}`);
+
   const orchestrator = createOrchestrator(
     {
       store,
@@ -81,10 +100,23 @@ export async function startWorkbench(
               diff(config, worktreeFor(config, ticket.id), from ?? ticket.base, ticket.carrying),
             continued: (ticketId) =>
               whatHappenedTo(store.ticket(ticketId), store.eventsFor(ticketId)),
+            query: engine,
           }),
       modelFor: (stage) => agents()[stage].model,
       // Fake agents need no credentials: nothing they do leaves this machine.
-      credentials: fake ? async () => ({ ok: true, how: 'fake agents' }) : cachedCredentials(),
+      credentials: fake
+        ? async () => ({ ok: true, how: 'fake agents' })
+        : settings.provider === 'claude'
+          ? cachedCredentials()
+          : // A workbench pointed at a local server has no Claude login to find, and
+            // asking the Claude CLI about it would be asking the wrong machine.
+            cachedCredentials(async () =>
+              providerCredentials({
+                provider: settings.provider,
+                baseUrl: settings.baseUrl,
+                apiKey: settings.apiKey,
+              }),
+            ),
     },
     { pollMs: config.pollMs },
   );
@@ -92,7 +124,7 @@ export async function startWorkbench(
   // Where a one-shot question is asked from, and nothing is running in it until
   // something asks for it to be — a board nobody is writing a ticket on holds no
   // subprocess open.
-  const pool = fake ? undefined : createWarmPool();
+  const pool = fake ? undefined : createWarmPool({ run: engine });
 
   // The conversation about a ticket, and the process it keeps alive between the
   // turns of one. Unlike the pool above it can start nothing until it is told which
@@ -109,6 +141,7 @@ export async function startWorkbench(
         },
         protectedPaths: config.protectedPaths,
         about: readAbout(config),
+        query: engine,
       });
 
   // How long a ticket is likely to take, guessed as it moves rather than when

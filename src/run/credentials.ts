@@ -119,6 +119,55 @@ export async function checkCredentials(env = process.env): Promise<Credentials> 
 }
 
 /**
+ * The credential for a workbench that is not talking to Claude.
+ *
+ * Everything above this function asks the Claude CLI what it thinks, which is the right
+ * question to ask when the Claude CLI is the thing doing the work and exactly the wrong
+ * one when it is not: a workbench pointed at a local server has no `claude` login to
+ * find and should not be told it needs one.
+ *
+ * What is checked is that there is a key where the provider looks for one, or that the
+ * address is a machine on this box, where a key is ordinarily nobody's business. Whether
+ * the key is *accepted* is a separate question, and `verifyEngine` is what spends the
+ * call that answers it.
+ */
+export function providerCredentials(p: {
+  provider: string;
+  baseUrl: string;
+  apiKey: string;
+}): Credentials {
+  if (p.apiKey !== '') return { ok: true, how: `${keyName()} for ${p.provider} at ${p.baseUrl}` };
+
+  if (isLocal(p.baseUrl)) {
+    return { ok: true, how: `no key, which is normal for ${p.baseUrl}` };
+  }
+
+  return {
+    ok: false,
+    why: `${p.provider} at ${p.baseUrl} has no key to send`,
+    fix: [
+      'Pick one:',
+      '',
+      '  export WB_API_KEY=...      the workbench’s own variable.',
+      '  export OPENAI_API_KEY=...  read too, since everything else on this machine',
+      '                             already puts the key there.',
+      '',
+      'A server on this machine (http://127.0.0.1:..., http://localhost:...) needs',
+      'neither, and runs without one.',
+    ].join('\n'),
+  };
+}
+
+function keyName(): string {
+  return (process.env['WB_API_KEY'] ?? '') !== '' ? 'WB_API_KEY' : 'OPENAI_API_KEY';
+}
+
+/** A service on this machine, which is where most people run their own models. */
+function isLocal(url: string): boolean {
+  return /^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\])(:\d+)?(\/|$)/i.test(url);
+}
+
+/**
  * Actually uses the credential, rather than noting that there is one.
  *
  * Finding a credential is cheap and proves nothing: a well-formed token in the
